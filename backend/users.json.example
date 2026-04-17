@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy to users.json and replace the password hashes. Passwords are SHA-256 hashed. Each user gets a unique api_key (mn_<48-hex>) for their Windows recorder. Generate a password hash: python -c \"import hashlib; print(hashlib.sha256('yourPassword'.encode()).hexdigest())\"",
+  "users": [
+    {
+      "email": "admin@example.com",
+      "password_hash": "REPLACE_WITH_SHA256_HASH_OF_YOUR_PASSWORD",
+      "name": "Admin User",
+      "role": "admin",
+      "api_key": "mn_<48 hex characters, one per user>"
+    }
+  ]
+}

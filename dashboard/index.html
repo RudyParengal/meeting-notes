@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Meeting Notes</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+:root {
+  --bg: #0d1117; --panel: #161b22; --border: #30363d;
+  --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --ok: #3fb950; --warn: #d29922;
+}
+* { box-sizing: border-box }
+body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg); color: var(--text); }
+.app { display: grid; grid-template-columns: 340px 1fr; height: 100vh }
+.sidebar { background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto }
+.topbar { padding: 16px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 1 }
+.topbar h1 { margin: 0 0 8px; font-size: 18px }
+.topbar input { width: 100%; padding: 8px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-size: 14px }
+.session { padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; position: relative }
+.session:hover { background: #1f2937 }
+.session.active { background: #1e3a5f; border-left: 3px solid var(--accent) }
+.session.trashed { opacity: 0.55 }
+.session.trashed .title { text-decoration: line-through; color: var(--muted) }
+.session .title { font-weight: 600; font-size: 14px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 24px }
+.session .del-btn { position: absolute; top: 10px; right: 10px; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; opacity: 0; transition: opacity 0.15s, background 0.15s }
+.session:hover .del-btn { opacity: 1 }
+.session .del-btn:hover { color: #f85149; background: #f8514922 }
+.session .meta { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
+.session .badge { background: var(--border); padding: 1px 6px; border-radius: 10px; font-size: 11px }
+.session .badge.processing { background: var(--warn); color: #000 }
+.session .badge.failed { background: #f85149; color: #fff }
+.content { overflow-y: auto; padding: 32px 48px }
+.content h1, .content h2, .content h3 { border-bottom: 1px solid var(--border); padding-bottom: 4px }
+.content table { border-collapse: collapse; width: 100%; margin: 16px 0 }
+.content th, .content td { padding: 8px 12px; border: 1px solid var(--border); text-align: left; vertical-align: top }
+.content th { background: var(--panel) }
+.content code { background: var(--panel); padding: 2px 6px; border-radius: 4px; font-size: 0.9em }
+.content pre { background: var(--panel); padding: 12px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap }
+.content blockquote { border-left: 3px solid var(--accent); padding-left: 16px; color: var(--muted) }
+.empty { color: var(--muted); text-align: center; padding: 64px 16px }
+.auth-gate { max-width: 400px; margin: 100px auto; background: var(--panel); padding: 24px; border-radius: 8px; border: 1px solid var(--border) }
+.auth-gate input { width: 100%; padding: 10px; margin: 12px 0; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: monospace }
+.auth-gate button { padding: 10px 24px; background: var(--accent); color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600 }
+.spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 6px; vertical-align: middle }
+@keyframes spin { to { transform: rotate(360deg) } }
+details summary { cursor: pointer; color: var(--muted); margin: 16px 0 }
+/* Tag pills */
+.tag-pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; margin: 1px 2px; cursor: pointer; font-weight: 500 }
+.tag-pill.important { background: #f8514933; color: #f85149; border: 1px solid #f8514955 }
+.tag-pill.follow-up { background: #d2992233; color: #d29922; border: 1px solid #d2992255 }
+.tag-pill.client { background: #58a6ff33; color: #58a6ff; border: 1px solid #58a6ff55 }
+.tag-pill.internal { background: #8b949e33; color: #8b949e; border: 1px solid #8b949e55 }
+.tag-pill.archived { background: #30363d; color: #8b949e; border: 1px solid #484f58 }
+.tag-pill.default-tag { background: #3fb95033; color: #3fb950; border: 1px solid #3fb95055 }
+.tag-pill .remove-tag { margin-left: 4px; cursor: pointer; opacity: 0.7 }
+.tag-pill .remove-tag:hover { opacity: 1 }
+/* Tag filter bar */
+.tag-filter-bar { padding: 8px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 4px; flex-wrap: wrap; align-items: center }
+.tag-filter-bar .tag-pill { cursor: pointer }
+.tag-filter-bar .tag-pill.active-filter { outline: 2px solid var(--accent); outline-offset: 1px }
+/* Admin panel */
+.admin-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 100; display: flex; align-items: center; justify-content: center }
+.admin-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 24px; width: 700px; max-height: 80vh; overflow-y: auto }
+.admin-panel h2 { margin-top: 0 }
+.admin-panel table { width: 100%; border-collapse: collapse; margin: 12px 0 }
+.admin-panel th, .admin-panel td { padding: 8px; border: 1px solid var(--border); text-align: left; font-size: 13px }
+.admin-panel th { background: var(--bg) }
+.admin-panel input { padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 13px; width: 100% }
+.admin-panel button { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600 }
+.btn-primary { background: var(--accent); color: #fff }
+.btn-danger { background: #f85149; color: #fff }
+.btn-secondary { background: var(--border); color: var(--text) }
+.btn-small { padding: 3px 10px; font-size: 12px }
+.copy-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 11px }
+.copy-btn:hover { color: var(--text); border-color: var(--accent) }
+/* Reanalyze bar */
+.reanalyze-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap }
+.reanalyze-bar select { padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px }
+/* Tags editor */
+.tags-editor { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; padding: 8px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border) }
+.tags-editor input { flex: 1; min-width: 120px; padding: 4px 8px; background: transparent; border: none; color: var(--text); font-size: 13px; outline: none }
+.tag-suggestions { display: flex; gap: 4px; flex-wrap: wrap }
+.tag-suggestions .tag-pill { opacity: 0.6; cursor: pointer }
+.tag-suggestions .tag-pill:hover { opacity: 1 }
+/* User info in topbar */
+.user-info { font-size: 12px; color: var(--muted); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between }
+.user-info .user-name { font-weight: 600; color: var(--text) }
+/* Trash toggle button */
+.trash-btn { padding: 3px 10px; background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 11px; display: inline-flex; align-items: center; gap: 4px }
+.trash-btn:hover { color: var(--text); border-color: var(--accent) }
+.trash-btn.active { background: #f8514922; color: #f85149; border-color: #f8514966 }
+.trash-btn .trash-count { background: var(--border); color: var(--text); padding: 0 6px; border-radius: 8px; font-size: 10px; font-weight: 600 }
+.trash-btn.active .trash-count { background: #f85149; color: #fff }
+/* Trash banner in content */
+.trash-banner { background: #f8514922; border: 1px solid #f8514955; color: #f85149; padding: 10px 14px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; display: flex; align-items: center; gap: 8px }
+.trash-actions { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap }
+.btn-restore { padding: 6px 14px; background: #238636; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600 }
+.btn-restore:hover { background: #2ea043 }
+.btn-purge { padding: 6px 14px; background: #da3633; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600 }
+.btn-purge:hover { background: #f85149 }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+var TOKEN_STORAGE = 'mn_session_token';
+var sessionToken = localStorage.getItem(TOKEN_STORAGE) || '';
+var currentUser = null;
+var sessions = [], activeId = null, activeData = null;
+var tagFilter = null;
+var templates = {};
+var viewMode = 'normal'; // 'normal' or 'trash'
+var trashCount = 0;
+
+function h(tag, props) {
+  props = props || {};
+  var children = Array.prototype.slice.call(arguments, 2);
+  var el = document.createElement(tag);
+  Object.keys(props).forEach(function(k) {
+    var v = props[k];
+    if (k === 'onclick') el.onclick = v;
+    else if (k === 'oninput') el.oninput = v;
+    else if (k === 'onchange') el.onchange = v;
+    else if (k === 'onkeydown') el.onkeydown = v;
+    else if (k === 'class') el.className = v;
+    else el.setAttribute(k, v);
+  });
+  children.flat().forEach(function(c) {
+    if (c == null) return;
+    el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  });
+  return el;
+}
+
+function getTagClass(tag) {
+  var map = { important: 'important', 'follow-up': 'follow-up', client: 'client', internal: 'internal', archived: 'archived' };
+  return map[tag] || 'default-tag';
+}
+
+async function api(path, opts) {
+  opts = opts || {};
+  var headers = Object.assign({}, opts.headers || {}, { 'Authorization': 'Bearer ' + sessionToken });
+  var res = await fetch(path, Object.assign({}, opts, { headers: headers }));
+  if (res.status === 401) {
+    localStorage.removeItem(TOKEN_STORAGE);
+    sessionToken = '';
+    currentUser = null;
+    renderLogin();
+    throw new Error('auth');
+  }
+  return res;
+}
+
+async function doLogin() {
+  var email = document.getElementById('login-email').value.trim();
+  var pw = document.getElementById('login-pw').value;
+  var errEl = document.getElementById('login-error');
+  if (!email || !pw) return;
+  try {
+    var res = await fetch('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, password: pw })
+    });
+    if (!res.ok) { errEl.textContent = 'Invalid email or password'; return; }
+    var data = await res.json();
+    sessionToken = data.token;
+    currentUser = data;
+    localStorage.setItem(TOKEN_STORAGE, sessionToken);
+    initAndRender();
+  } catch (e) { errEl.textContent = 'Login failed: ' + e.message; }
+}
+
+async function doLogout() {
+  try { await api('/logout', { method: 'POST' }); } catch(e) {}
+  localStorage.removeItem(TOKEN_STORAGE);
+  sessionToken = '';
+  currentUser = null;
+  renderLogin();
+}
+
+async function fetchMe() {
+  try {
+    var res = await api('/me');
+    if (res.ok) { currentUser = await res.json(); }
+  } catch(e) {}
+}
+
+async function fetchTemplates() {
+  try {
+    var res = await api('/templates');
+    if (res.ok) { var d = await res.json(); templates = d.templates || {}; }
+  } catch(e) {}
+}
+
+function downloadFile(sessionId, format) {
+  fetch('/results/' + sessionId + '/download', {
+    headers: { 'Authorization': 'Bearer ' + sessionToken }
+  }).then(function(res) { return res.text(); }).then(function(md) {
+    var content = md;
+    var filename = 'meeting-' + sessionId.substring(0,8) + '.md';
+    var mime = 'text/markdown';
+    if (format === 'txt') {
+      content = md.replace(/^#{1,6}\s*/gm, '').replace(/\*{1,2}([^*]+)\*{1,2}/g, '$1').replace(/\|/g, ' ').replace(/---+/g, '---');
+      filename = 'meeting-' + sessionId.substring(0,8) + '.txt';
+      mime = 'text/plain';
+    }
+    var blob = new Blob([content], { type: mime });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+}
+
+async function loadSessions(search) {
+  try {
+    var json;
+    if (viewMode === 'trash') {
+      var res = await api('/trash');
+      json = await res.json();
+    } else {
+      var q = search ? '?search=' + encodeURIComponent(search) : '';
+      if (tagFilter) { q += (q ? '&' : '?') + 'tag=' + encodeURIComponent(tagFilter); }
+      var res = await api('/sessions' + q);
+      json = await res.json();
+    }
+    sessions = json.sessions || [];
+    renderSidebar();
+  } catch (e) { console.error(e); }
+  // Always refresh trash count in background
+  refreshTrashCount();
+}
+
+async function refreshTrashCount() {
+  try {
+    var res = await api('/trash');
+    if (res.ok) {
+      var d = await res.json();
+      trashCount = (d.sessions || []).length;
+      updateTrashButton();
+    }
+  } catch(e) {}
+}
+
+function updateTrashButton() {
+  var btn = document.getElementById('trash-toggle-btn');
+  if (!btn) return;
+  btn.innerHTML = '';
+  var icon = document.createElement('span');
+  icon.textContent = viewMode === 'trash' ? 'Back' : 'Trash';
+  btn.appendChild(icon);
+  if (trashCount > 0) {
+    var cnt = document.createElement('span');
+    cnt.className = 'trash-count';
+    cnt.textContent = trashCount;
+    btn.appendChild(cnt);
+  }
+  btn.className = 'trash-btn' + (viewMode === 'trash' ? ' active' : '');
+}
+
+function toggleTrashView() {
+  viewMode = viewMode === 'trash' ? 'normal' : 'trash';
+  activeId = null;
+  activeData = null;
+  var contentEl = document.getElementById('content');
+  if (contentEl) {
+    contentEl.innerHTML = '';
+    var empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = viewMode === 'trash'
+      ? 'Trash: select an item to restore or permanently delete.'
+      : 'Select a meeting to view';
+    contentEl.appendChild(empty);
+  }
+  // Toggle visibility of tag filter bar and search relevance for trash view
+  var tagBar = document.getElementById('tag-filter-bar');
+  if (tagBar) tagBar.style.display = viewMode === 'trash' ? 'none' : '';
+  var searchInp = document.getElementById('search-input');
+  if (searchInp) searchInp.style.display = viewMode === 'trash' ? 'none' : '';
+  updateTrashButton();
+  loadSessions();
+}
+
+async function deleteSession(sessionId) {
+  if (!confirm('Delete this meeting?')) return;
+  try {
+    var res = await api('/results/' + sessionId, { method: 'DELETE' });
+    if (!res.ok) {
+      var err = await res.json().catch(function() { return {}; });
+      alert('Delete failed: ' + (err.detail || res.status));
+      return;
+    }
+    if (activeId === sessionId) {
+      activeId = null;
+      activeData = null;
+      var contentEl = document.getElementById('content');
+      if (contentEl) contentEl.innerHTML = '<div class="empty">Select a meeting to view</div>';
+    }
+    loadSessions(document.getElementById('search-input') ? document.getElementById('search-input').value : '');
+  } catch(e) { alert('Delete failed: ' + e.message); }
+}
+
+async function restoreSession(sessionId) {
+  try {
+    var res = await api('/results/' + sessionId + '/restore', { method: 'POST' });
+    if (!res.ok) {
+      var err = await res.json().catch(function() { return {}; });
+      alert('Restore failed: ' + (err.detail || res.status));
+      return;
+    }
+    activeId = null;
+    activeData = null;
+    var contentEl = document.getElementById('content');
+    if (contentEl) contentEl.innerHTML = '<div class="empty">Restored. Switch back to the main view to see it.</div>';
+    loadSessions();
+  } catch(e) { alert('Restore failed: ' + e.message); }
+}
+
+async function purgeSession(sessionId) {
+  if (!confirm('Permanently delete this meeting? This cannot be undone.')) return;
+  try {
+    var res = await api('/results/' + sessionId + '/purge', { method: 'DELETE' });
+    if (!res.ok) {
+      var err = await res.json().catch(function() { return {}; });
+      alert('Purge failed: ' + (err.detail || res.status));
+      return;
+    }
+    activeId = null;
+    activeData = null;
+    var contentEl = document.getElementById('content');
+    if (contentEl) contentEl.innerHTML = '<div class="empty">Permanently deleted.</div>';
+    loadSessions();
+  } catch(e) { alert('Purge failed: ' + e.message); }
+}
+
+function escapeHtml(s) {
+  return (s || '').replace(/[<>&]/g, function(c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]; });
+}
+
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text).then(function() {
+    // brief visual feedback could go here
+  });
+}
+
+async function reprocessSession(sessionId, meetingType) {
+  try {
+    await api('/results/' + sessionId + '/reprocess?meeting_type=' + encodeURIComponent(meetingType), { method: 'POST' });
+    setTimeout(function() { loadSession(sessionId); }, 1000);
+    loadSessions(document.getElementById('search-input') ? document.getElementById('search-input').value : '');
+  } catch(e) { console.error(e); }
+}
+
+async function updateTags(sessionId, tags) {
+  try {
+    await api('/results/' + sessionId + '/tags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+      body: JSON.stringify({ tags: tags })
+    });
+    if (activeData) activeData.tags = tags;
+    loadSessions(document.getElementById('search-input') ? document.getElementById('search-input').value : '');
+  } catch(e) { console.error(e); }
+}
+
+async function loadSession(id, fromTrash) {
+  activeId = id;
+  var endpoint = fromTrash ? '/trash/' + id : '/results/' + id;
+  var res = await api(endpoint);
+  if (!res.ok) {
+    var contentEl0 = document.getElementById('content');
+    if (contentEl0) contentEl0.innerHTML = '<div class="empty">Failed to load session.</div>';
+    return;
+  }
+  var data = await res.json();
+  activeData = data;
+  var summary = data.summary || '_no summary_';
+  var actions = data.actions || '_no actions_';
+  var header = '**Type:** ' + data.meeting_type + ' | **Duration:** ' + Math.round(data.duration_sec/60) + ' min | **Time:** ' + new Date(data.timestamp).toLocaleString();
+  var md = header + '\n\n---\n\n' + summary + '\n\n---\n\n# Action Plan\n\n' + actions;
+  var contentEl = document.getElementById('content');
+  contentEl.innerHTML = '';
+
+  // -- Trash view: show banner + Restore/Purge actions; skip tags/download/re-analyze --
+  if (fromTrash) {
+    var banner = document.createElement('div');
+    banner.className = 'trash-banner';
+    banner.textContent = 'This meeting is in the trash. Restore it to edit, tag, or download.';
+    contentEl.appendChild(banner);
+    var actionsDiv = document.createElement('div');
+    actionsDiv.className = 'trash-actions';
+    var btnRestore = document.createElement('button');
+    btnRestore.className = 'btn-restore';
+    btnRestore.textContent = 'Restore';
+    btnRestore.onclick = function() { restoreSession(id); };
+    var btnPurge = document.createElement('button');
+    btnPurge.className = 'btn-purge';
+    btnPurge.textContent = 'Delete permanently';
+    btnPurge.onclick = function() { purgeSession(id); };
+    actionsDiv.appendChild(btnRestore);
+    actionsDiv.appendChild(btnPurge);
+    contentEl.appendChild(actionsDiv);
+    contentEl.insertAdjacentHTML('beforeend', marked.parse(md) +
+      '<details><summary>Show raw transcript</summary><pre>' + escapeHtml(data.transcript || '') + '</pre></details>');
+    renderSidebar();
+    return;
+  }
+
+  // Tags editor
+  var currentTags = data.tags || [];
+  var tagsEditorDiv = document.createElement('div');
+  tagsEditorDiv.className = 'tags-editor';
+
+  function renderTagsEditor() {
+    tagsEditorDiv.innerHTML = '';
+    currentTags.forEach(function(tag) {
+      var pill = document.createElement('span');
+      pill.className = 'tag-pill ' + getTagClass(tag);
+      pill.textContent = tag;
+      var rm = document.createElement('span');
+      rm.className = 'remove-tag';
+      rm.textContent = '\u00d7';
+      rm.onclick = function() {
+        currentTags = currentTags.filter(function(t) { return t !== tag; });
+        updateTags(id, currentTags);
+        renderTagsEditor();
+      };
+      pill.appendChild(rm);
+      tagsEditorDiv.appendChild(pill);
+    });
+    var inp = document.createElement('input');
+    inp.type = 'text';
+    inp.placeholder = 'Add tag...';
+    inp.onkeydown = function(e) {
+      if (e.key === 'Enter' && inp.value.trim()) {
+        var newTag = inp.value.trim().toLowerCase();
+        if (currentTags.indexOf(newTag) === -1) {
+          currentTags.push(newTag);
+          updateTags(id, currentTags);
+        }
+        inp.value = '';
+        renderTagsEditor();
+      }
+    };
+    tagsEditorDiv.appendChild(inp);
+    // Suggestions
+    var sugDiv = document.createElement('div');
+    sugDiv.className = 'tag-suggestions';
+    var suggestions = ['important', 'follow-up', 'client', 'internal', 'archived'];
+    suggestions.forEach(function(sug) {
+      if (currentTags.indexOf(sug) === -1) {
+        var pill = document.createElement('span');
+        pill.className = 'tag-pill ' + getTagClass(sug);
+        pill.textContent = '+' + sug;
+        pill.onclick = function() {
+          currentTags.push(sug);
+          updateTags(id, currentTags);
+          renderTagsEditor();
+        };
+        sugDiv.appendChild(pill);
+      }
+    });
+    tagsEditorDiv.appendChild(sugDiv);
+  }
+  renderTagsEditor();
+  contentEl.appendChild(tagsEditorDiv);
+
+  // Download + re-analyze bar
+  var barDiv = document.createElement('div');
+  barDiv.className = 'reanalyze-bar';
+  var btnMd = document.createElement('button');
+  btnMd.textContent = 'Download MD';
+  btnMd.style.cssText = 'padding:6px 14px;background:#238636;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;';
+  btnMd.onclick = function() { downloadFile(id, 'md'); };
+  var btnTxt = document.createElement('button');
+  btnTxt.textContent = 'Download TXT';
+  btnTxt.style.cssText = 'padding:6px 14px;background:#30363d;color:#e6edf3;border:1px solid #484f58;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;';
+  btnTxt.onclick = function() { downloadFile(id, 'txt'); };
+  barDiv.appendChild(btnMd);
+  barDiv.appendChild(btnTxt);
+
+  // Re-analyze dropdown
+  if (data.status === 'complete') {
+    var sel = document.createElement('select');
+    sel.style.marginLeft = '12px';
+    var defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = 'Re-analyze as...';
+    sel.appendChild(defaultOpt);
+    Object.keys(templates).forEach(function(key) {
+      var opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = key.charAt(0).toUpperCase() + key.slice(1);
+      if (key === data.meeting_type) opt.disabled = true;
+      sel.appendChild(opt);
+    });
+    sel.onchange = function() {
+      if (sel.value) {
+        reprocessSession(id, sel.value);
+        sel.value = '';
+      }
+    };
+    barDiv.appendChild(sel);
+  }
+  contentEl.appendChild(barDiv);
+
+  contentEl.insertAdjacentHTML('beforeend', marked.parse(md) +
+    '<details><summary>Show raw transcript</summary><pre>' + escapeHtml(data.transcript) + '</pre></details>');
+  renderSidebar();
+}
+
+function renderSidebar() {
+  var list = document.getElementById('session-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!sessions.length) {
+    var msg = viewMode === 'trash'
+      ? 'Trash is empty.'
+      : 'No meetings yet. Start one from the Windows recorder.';
+    list.appendChild(h('div', { class: 'empty' }, msg));
+    return;
+  }
+  var isTrash = viewMode === 'trash';
+  sessions.forEach(function(s) {
+    var active = s.session_id === activeId ? ' active' : '';
+    var processing = s.status === 'processing';
+    var failed = s.status === 'failed';
+    var badge = processing ? h('span', { class: 'badge processing' }, 'processing')
+              : failed ? h('span', { class: 'badge failed' }, 'failed')
+              : h('span', { class: 'badge' }, s.meeting_type || '\u2014');
+    var titleEl = processing
+      ? h('div', { class: 'title' }, h('span', { class: 'spinner' }), (s.title || '(new meeting)'))
+      : h('div', { class: 'title' }, s.title || '(untitled)');
+    // Tag pills
+    var tagEls = (s.tags || []).map(function(tag) {
+      var pill = document.createElement('span');
+      pill.className = 'tag-pill ' + getTagClass(tag);
+      pill.textContent = tag;
+      pill.onclick = function(e) {
+        e.stopPropagation();
+        if (isTrash) return; // no tag filter in trash view
+        tagFilter = tagFilter === tag ? null : tag;
+        loadSessions(document.getElementById('search-input') ? document.getElementById('search-input').value : '');
+        renderTagFilterBar();
+      };
+      return pill;
+    });
+    var metaChildren = [
+      document.createTextNode(new Date(s.timestamp).toLocaleDateString() + ' ' + new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })),
+      badge,
+      document.createTextNode(Math.round(s.duration_sec / 60) + 'm')
+    ];
+    tagEls.forEach(function(te) { metaChildren.push(te); });
+    var metaDiv = document.createElement('div');
+    metaDiv.className = 'meta';
+    metaChildren.forEach(function(c) { metaDiv.appendChild(c); });
+    var item = document.createElement('div');
+    item.className = 'session' + active + (isTrash ? ' trashed' : '');
+    item.onclick = function() { loadSession(s.session_id, isTrash); };
+    item.appendChild(titleEl);
+    item.appendChild(metaDiv);
+    // Delete button (only in normal view)
+    if (!isTrash) {
+      var del = document.createElement('button');
+      del.className = 'del-btn';
+      del.title = 'Delete meeting';
+      del.textContent = '\u{1F5D1}';
+      del.onclick = function(e) { e.stopPropagation(); deleteSession(s.session_id); };
+      item.appendChild(del);
+    }
+    list.appendChild(item);
+  });
+}
+
+function renderTagFilterBar() {
+  var bar = document.getElementById('tag-filter-bar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  var label = document.createElement('span');
+  label.style.cssText = 'font-size:11px;color:var(--muted);margin-right:4px;';
+  label.textContent = 'Filter:';
+  bar.appendChild(label);
+  var allTags = ['important', 'follow-up', 'client', 'internal', 'archived'];
+  allTags.forEach(function(tag) {
+    var pill = document.createElement('span');
+    pill.className = 'tag-pill ' + getTagClass(tag) + (tagFilter === tag ? ' active-filter' : '');
+    pill.textContent = tag;
+    pill.onclick = function() {
+      tagFilter = tagFilter === tag ? null : tag;
+      loadSessions(document.getElementById('search-input') ? document.getElementById('search-input').value : '');
+      renderTagFilterBar();
+    };
+    bar.appendChild(pill);
+  });
+  if (tagFilter) {
+    var clear = document.createElement('span');
+    clear.style.cssText = 'font-size:11px;color:var(--accent);cursor:pointer;margin-left:8px;';
+    clear.textContent = 'clear';
+    clear.onclick = function() {
+      tagFilter = null;
+      loadSessions(document.getElementById('search-input') ? document.getElementById('search-input').value : '');
+      renderTagFilterBar();
+    };
+    bar.appendChild(clear);
+  }
+}
+
+// --- Admin panel ---
+async function showAdminPanel() {
+  var overlay = document.createElement('div');
+  overlay.className = 'admin-overlay';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  var panel = document.createElement('div');
+  panel.className = 'admin-panel';
+  panel.innerHTML = '<h2>User Management</h2><div id="admin-content">Loading...</div>';
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+  await refreshAdminUsers();
+}
+
+async function refreshAdminUsers() {
+  var container = document.getElementById('admin-content');
+  if (!container) return;
+  try {
+    var res = await api('/admin/users');
+    var data = await res.json();
+    var users = data.users || [];
+    container.innerHTML = '';
+    var table = document.createElement('table');
+    var thead = '<tr><th>Email</th><th>Name</th><th>Role</th><th>API Key</th><th></th></tr>';
+    table.innerHTML = thead;
+    users.forEach(function(u) {
+      var tr = document.createElement('tr');
+      var tdEmail = document.createElement('td');
+      tdEmail.textContent = u.email;
+      var tdName = document.createElement('td');
+      tdName.textContent = u.name;
+      var tdRole = document.createElement('td');
+      tdRole.textContent = u.role;
+      var tdKey = document.createElement('td');
+      tdKey.style.fontFamily = 'monospace';
+      tdKey.style.fontSize = '11px';
+      var keySpan = document.createElement('span');
+      keySpan.textContent = u.api_key ? (u.api_key.substring(0, 16) + '...') : 'N/A';
+      keySpan.title = u.api_key || '';
+      var copyBtn = document.createElement('button');
+      copyBtn.className = 'copy-btn';
+      copyBtn.textContent = 'Copy';
+      copyBtn.onclick = function() { copyToClipboard(u.api_key); copyBtn.textContent = 'Copied!'; setTimeout(function() { copyBtn.textContent = 'Copy'; }, 1500); };
+      tdKey.appendChild(keySpan);
+      tdKey.appendChild(document.createTextNode(' '));
+      tdKey.appendChild(copyBtn);
+      var tdActions = document.createElement('td');
+      if (u.email !== currentUser.email) {
+        var delBtn = document.createElement('button');
+        delBtn.className = 'btn-danger btn-small';
+        delBtn.textContent = 'Delete';
+        delBtn.onclick = async function() {
+          if (!confirm('Delete user ' + u.email + '?')) return;
+          await api('/admin/users/' + encodeURIComponent(u.email), { method: 'DELETE' });
+          await refreshAdminUsers();
+        };
+        tdActions.appendChild(delBtn);
+      }
+      tr.appendChild(tdEmail);
+      tr.appendChild(tdName);
+      tr.appendChild(tdRole);
+      tr.appendChild(tdKey);
+      tr.appendChild(tdActions);
+      table.appendChild(tr);
+    });
+    container.appendChild(table);
+    // Add user form
+    var formDiv = document.createElement('div');
+    formDiv.style.cssText = 'margin-top:16px;padding-top:16px;border-top:1px solid var(--border);';
+    formDiv.innerHTML = '<h3 style="margin-top:0">Add User</h3>';
+    var row = document.createElement('div');
+    row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:end;';
+    var emailInp = document.createElement('input');
+    emailInp.placeholder = 'Email';
+    emailInp.id = 'add-user-email';
+    var nameInp = document.createElement('input');
+    nameInp.placeholder = 'Name';
+    nameInp.id = 'add-user-name';
+    var pwInp = document.createElement('input');
+    pwInp.placeholder = 'Password';
+    pwInp.type = 'password';
+    pwInp.id = 'add-user-pw';
+    var addBtn = document.createElement('button');
+    addBtn.className = 'btn-primary';
+    addBtn.textContent = 'Add';
+    addBtn.onclick = async function() {
+      var e = document.getElementById('add-user-email').value.trim();
+      var n = document.getElementById('add-user-name').value.trim();
+      var p = document.getElementById('add-user-pw').value;
+      if (!e || !n || !p) return;
+      var errDiv = document.getElementById('add-user-error');
+      try {
+        var res = await api('/admin/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+          body: JSON.stringify({ email: e, name: n, password: p })
+        });
+        if (!res.ok) { var errData = await res.json(); errDiv.textContent = errData.detail || 'Failed'; return; }
+        errDiv.textContent = '';
+        await refreshAdminUsers();
+      } catch(ex) { errDiv.textContent = ex.message; }
+    };
+    row.appendChild(emailInp);
+    row.appendChild(nameInp);
+    row.appendChild(pwInp);
+    row.appendChild(addBtn);
+    formDiv.appendChild(row);
+    var errDiv = document.createElement('div');
+    errDiv.id = 'add-user-error';
+    errDiv.style.cssText = 'color:#f85149;font-size:13px;margin-top:8px;';
+    formDiv.appendChild(errDiv);
+    container.appendChild(formDiv);
+  } catch(e) { container.textContent = 'Failed to load users: ' + e.message; }
+}
+
+function renderLogin() {
+  // Idempotent: skip redraw if login form already present (preserves typing)
+  if (document.getElementById('login-email')) return;
+  var root = document.getElementById('root');
+  root.innerHTML = '';
+  var emailInput = h('input', { type: 'email', id: 'login-email', placeholder: 'email@example.com' });
+  var pwInput = h('input', { type: 'password', id: 'login-pw', placeholder: 'Password' });
+  pwInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') doLogin(); });
+  var errMsg = h('div', { id: 'login-error', style: 'color:#f85149;font-size:13px;min-height:20px;margin-bottom:4px' });
+  var btn = h('button', { onclick: doLogin }, 'Sign In');
+  root.appendChild(h('div', { class: 'auth-gate' },
+    h('h2', {}, 'Meeting Notes'),
+    h('p', {}, 'Sign in to view your meeting notes:'),
+    emailInput, pwInput, errMsg, btn
+  ));
+}
+
+async function initAndRender() {
+  if (!sessionToken) { renderLogin(); return; }
+  var root = document.getElementById('root');
+  root.innerHTML = '<div class="empty">Loading...</div>';
+  try {
+    await fetchMe();
+    if (!currentUser) { renderLogin(); return; }
+    await fetchTemplates();
+    renderApp();
+  } catch(e) {
+    // 401 from api() already called renderLogin; nothing else to do
+  }
+}
+
+function renderApp() {
+  var root = document.getElementById('root');
+  root.innerHTML = '';
+  var searchInput = h('input', { type: 'search', placeholder: 'Search notes...', id: 'search-input' });
+
+  // Topbar with user info
+  var userInfoDiv = document.createElement('div');
+  userInfoDiv.className = 'user-info';
+  var nameSpan = document.createElement('span');
+  nameSpan.className = 'user-name';
+  nameSpan.textContent = currentUser.name || currentUser.email;
+  userInfoDiv.appendChild(nameSpan);
+  var btnGroup = document.createElement('div');
+  btnGroup.style.cssText = 'display:flex;gap:6px;';
+  if (currentUser.role === 'admin') {
+    var adminBtn = document.createElement('button');
+    adminBtn.textContent = 'Admin';
+    adminBtn.style.cssText = 'padding:3px 10px;background:#8957e5;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600;';
+    adminBtn.onclick = showAdminPanel;
+    btnGroup.appendChild(adminBtn);
+  }
+  var trashBtn = document.createElement('button');
+  trashBtn.id = 'trash-toggle-btn';
+  trashBtn.className = 'trash-btn' + (viewMode === 'trash' ? ' active' : '');
+  trashBtn.textContent = viewMode === 'trash' ? 'Back' : 'Trash';
+  trashBtn.onclick = toggleTrashView;
+  btnGroup.appendChild(trashBtn);
+  var logoutBtn = document.createElement('button');
+  logoutBtn.textContent = 'Logout';
+  logoutBtn.style.cssText = 'padding:3px 10px;background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:4px;cursor:pointer;font-size:11px;';
+  logoutBtn.onclick = doLogout;
+  btnGroup.appendChild(logoutBtn);
+  userInfoDiv.appendChild(btnGroup);
+
+  var topbarDiv = document.createElement('div');
+  topbarDiv.className = 'topbar';
+  topbarDiv.appendChild(userInfoDiv);
+  var titleRow = document.createElement('div');
+  titleRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;';
+  titleRow.appendChild(h('h1', { style: 'margin:0' }, 'Meeting Notes'));
+  topbarDiv.appendChild(titleRow);
+  topbarDiv.appendChild(searchInput);
+
+  var tagFilterBar = document.createElement('div');
+  tagFilterBar.className = 'tag-filter-bar';
+  tagFilterBar.id = 'tag-filter-bar';
+
+  var sidebarDiv = document.createElement('div');
+  sidebarDiv.className = 'sidebar';
+  sidebarDiv.appendChild(topbarDiv);
+  sidebarDiv.appendChild(tagFilterBar);
+  sidebarDiv.appendChild(h('div', { id: 'session-list' }));
+
+  var appDiv = document.createElement('div');
+  appDiv.className = 'app';
+  appDiv.appendChild(sidebarDiv);
+  appDiv.appendChild(h('div', { class: 'content', id: 'content' }, h('div', { class: 'empty' }, 'Select a meeting to view')));
+
+  root.appendChild(appDiv);
+
+  searchInput.addEventListener('input', function(e) {
+    clearTimeout(window._searchTO);
+    window._searchTO = setTimeout(function() { loadSessions(e.target.value); }, 300);
+  });
+
+  renderTagFilterBar();
+  loadSessions();
+  setInterval(function() {
+    var q = document.getElementById('search-input');
+    loadSessions(q ? q.value : '');
+  }, 10000);
+}
+
+initAndRender();
+</script>
+</body>
+</html>

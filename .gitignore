@@ -1,0 +1,43 @@
+# Secrets & config
+.env
+backend/.env
+backend/users.json
+*.lock
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# Node (dashboard deps if any)
+node_modules/
+
+# Whisper model files (large binaries, download separately)
+windows-recorder/models/
+*.bin
+
+# Runtime data
+/var/meeting-notes/
+models/
+output/
+outputs/
+
+# Local recordings & transcripts (user-specific)
+last_meeting_*.wav
+last_transcript_*.txt
+recorder.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# OS
+desktop.ini
