@@ -43,7 +43,7 @@ DEFAULT_CONFIG = {
     "notify_on_complete": True,
     # Phase 2 features
     "dual_stream": True,                  # capture mic + system audio separately for speaker diarization
-    "custom_vocabulary": [],              # e.g. ["CompanyName", "ProductX", "DeepSeek"]
+    "custom_vocabulary": [],              # e.g. ["CompanyName", "TeamHub", "DeepSeek", "Acme"]
     "sound_effects": True,                # play beep on start/stop
     "silence_alert_threshold_rms": 0.001, # RMS below this = silence
     "silence_alert_seconds": 10,          # alert after this many seconds of silence
@@ -689,7 +689,29 @@ def main():
     setup_logging()
 
     if not _acquire_single_instance_lock():
-        # Already running — silent exit, no notification
+        # Already running — show a Windows balloon so the user knows it's alive.
+        # Users often can't find the tray icon (Win11 hides it) and think the app failed.
+        log.info("Meeting Recorder already running — showing notification to user")
+        try:
+            # Use pywin32 Shell_NotifyIconW via a minimal approach
+            import ctypes
+            ctypes.windll.user32.MessageBeep(0x00000040)  # MB_ICONASTERISK beep
+            # Try to show a balloon via shell — fall back to MessageBox if no tray available
+            try:
+                # Use BurntToast-style toast via PowerShell (most reliable on Win10/11)
+                subprocess.Popen([
+                    "powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
+                    "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null;"
+                    "$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+                    "$xml.GetElementsByTagName('text')[0].AppendChild($xml.CreateTextNode('Meeting Recorder is already running')) | Out-Null;"
+                    "$xml.GetElementsByTagName('text')[1].AppendChild($xml.CreateTextNode('Look for the blue circle in the system tray. Click the ^ arrow in the taskbar to find hidden icons.')) | Out-Null;"
+                    "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml);"
+                    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Meeting Recorder').Show($toast);"
+                ], creationflags=0x08000000)  # CREATE_NO_WINDOW
+            except Exception as e:
+                log.warning(f"toast failed: {e}")
+        except Exception:
+            pass
         return
 
     cfg = load_config()
