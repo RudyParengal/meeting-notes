@@ -1,0 +1,3 @@
+# The Windows app's own window (desktop/window.py). Qt WebEngine is in Addons.
+PySide6-Essentials==6.9.1
+PySide6-Addons==6.9.1

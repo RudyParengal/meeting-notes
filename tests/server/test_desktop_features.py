@@ -1,6 +1,8 @@
 """What the Notewell desktop app adds to the server: an AI chosen on a Settings
 screen instead of in .env, notes a person can edit, context for the AI, and a
 recorder the dashboard can drive."""
+import base64
+import json
 import os
 
 import pytest
@@ -110,6 +112,29 @@ def test_a_bad_address_is_refused(desktop, client, admin):
 def test_a_damaged_settings_file_reads_as_not_set_up(desktop):
     desktop.settings_store.SETTINGS_FILE.write_text("{not json", encoding="utf-8")
     assert desktop.settings_store.ai() == {}
+
+
+def test_on_windows_the_saved_key_is_unreadable_in_the_file(desktop, client, admin):
+    save(client, admin)
+    on_disk = desktop.settings_store.SETTINGS_FILE.read_text(encoding="utf-8")
+    if os.name == "nt":
+        assert SAMPLE_PROVIDER_KEY not in on_disk and '"dpapi:' in on_disk
+    assert desktop.settings_store.ai()["api_key"] == SAMPLE_PROVIDER_KEY
+
+
+def test_a_key_saved_by_an_older_version_still_works(desktop):
+    desktop.settings_store.SETTINGS_FILE.write_text(json.dumps({"ai": {
+        "provider": "mistral", "base_url": "https://api.mistral.ai/v1",
+        "model": "ministral-14b-latest", "api_key": SAMPLE_PROVIDER_KEY}}), encoding="utf-8")
+    assert desktop.settings_store.ai()["api_key"] == SAMPLE_PROVIDER_KEY
+
+
+def test_a_key_locked_by_another_user_reads_as_no_key(desktop):
+    desktop.settings_store.SETTINGS_FILE.write_text(json.dumps({"ai": {
+        "provider": "mistral", "base_url": "https://api.mistral.ai/v1",
+        "model": "ministral-14b-latest", "api_key": "dpapi:" + base64.b64encode(b"sealed on some other PC" * 4).decode()}}),
+        encoding="utf-8")
+    assert desktop.settings_store.ai()["api_key"] == ""
 
 
 def test_the_test_button_reports_success_and_failure(desktop, client, admin, monkeypatch):

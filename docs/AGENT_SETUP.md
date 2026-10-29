@@ -16,8 +16,7 @@ Rules:
 - Do not change system or security settings. Do not turn off antivirus.
 - After each step, say in one plain sentence what you checked and what it returned.
 
-1. Check: Windows 10/11 64-bit, at least 2 GB free on C:, Microsoft Edge installed
-   (Notewell opens in an Edge app window; without Edge it uses the default browser).
+1. Check: Windows 10/11 64-bit, at least 2 GB free on C:.
      [Environment]::Is64BitOperatingSystem
      (Get-PSDrive C).Free / 1GB
 
@@ -48,9 +47,14 @@ Rules:
    If it does not answer, show me the last 30 lines of $nw\notewell.log and of
    $nw\recorder\recorder.log, and stop.
 
-6. Check the recorder can hear this computer. Use the app's own key file
-   (read it into a variable, never print it):
-     $h = @{'X-API-Key' = (Get-Content "$nw\app.key").Trim()}
+6. Check the recorder can hear this computer. Use the app's own key file. It is
+   locked to this Windows user; unlock it into a variable in Windows PowerShell
+   (powershell.exe) and never print it:
+     Add-Type -AssemblyName System.Security
+     $saved = (Get-Content "$nw\app.key").Trim()
+     $key = if ($saved -like 'dpapi:*') { [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect(
+              [Convert]::FromBase64String($saved.Substring(6)), $null, 'CurrentUser')) } else { $saved }
+     $h = @{'X-API-Key' = $key}
      Invoke-RestMethod "http://127.0.0.1:$port/recorder" -Headers $h           # expect available = true
      Invoke-RestMethod "http://127.0.0.1:$port/recorder/devices" -Headers $h   # list the devices
      Invoke-RestMethod "http://127.0.0.1:$port/settings/ai" -Headers $h        # ready = false until I save a key

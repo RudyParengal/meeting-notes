@@ -293,6 +293,24 @@ def test_unsupported_audio_types_are_refused(client, admin):
     assert r.status_code in (400, 501)
 
 
+def test_an_oversized_upload_is_refused_before_it_is_read(client, admin, app_module, monkeypatch):
+    monkeypatch.setattr(app_module.config, "MAX_UPLOAD_MB", 0)      # limit + margin = 1 MB
+    r = client.post("/upload-audio", files={"file": ("call.wav", b"\0" * (2 * 1024 * 1024), "audio/wav")})
+    assert r.status_code == 413                                   # even before the key is checked
+    monkeypatch.setattr(app_module.config, "MAX_UPLOAD_MB", 200)
+    r = client.post("/upload-audio", headers=admin, files={"file": ("call.wav", b"RIFF", "audio/wav")})
+    assert r.status_code != 413
+
+
+def test_only_the_named_hosts_are_answered(client, admin, app_module, monkeypatch):
+    """DNS rebinding: a web page whose own name now points at this computer."""
+    monkeypatch.setattr(app_module.config, "ALLOWED_HOSTS", ["127.0.0.1", "localhost"])
+    assert client.get("/health", headers={"Host": "evil.example"}).status_code == 400
+    assert client.get("/sessions", headers={**admin, "Host": "evil.example:8767"}).status_code == 400
+    assert client.get("/health", headers={"Host": "127.0.0.1:8767"}).status_code == 200
+    assert client.get("/health", headers={"Host": "localhost"}).status_code == 200
+
+
 def test_pdf_engine_cannot_be_made_to_fetch_urls(app_module):
     """A note is built from what people said on a call; a link in it must never be fetched."""
     with pytest.raises(ValueError):

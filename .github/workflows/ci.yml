@@ -5,6 +5,7 @@ on:
   pull_request:
 
 # Read-only by default; nothing here needs to write to the repository.
+# Every action is pinned to a commit, so a moved tag cannot change what runs.
 permissions:
   contents: read
 
@@ -13,10 +14,10 @@ jobs:
     name: No secrets or personal data
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0          # the whole history, so old commits are checked too
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: python scripts/check-secrets.py --history
@@ -29,19 +30,19 @@ jobs:
       matrix:
         python: ["3.10", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
-      - run: pip install -r backend/requirements.txt pytest
+      - run: pip install -r backend/requirements.txt pytest requests   # requests: the desktop app's sync, tested here too
       - run: python -m pytest tests/server -q
 
   recorder:
     name: Recorder tests + installer syntax (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: Install exactly what install.ps1 installs
@@ -69,8 +70,8 @@ jobs:
     name: Whole system, end to end (fake AI)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: pip install -r backend/requirements.txt
@@ -90,7 +91,7 @@ jobs:
     name: Container builds and starts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build
         run: docker build -t meeting-notes:ci .
       - name: Run it the way docker-compose does, and check it answers

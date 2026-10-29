@@ -116,6 +116,49 @@ def t_down():
 
 check("a server that is not running", t_down)
 
+print("\nA second server to fall back on (deliver)")
+UNDELIVERED = recorder.APPDIR / "undelivered.txt"
+
+
+def t_fallback():
+    UNDELIVERED.unlink(missing_ok=True)
+    url, stop = serve(lambda h: reply(h, 202, {"session_id": "cd" * 16}))
+    try:
+        cfg = {**recorder.DEFAULT_CONFIG, "api_url": "http://127.0.0.1:9", "api_key": "far",
+               "fallback_api_url": url, "fallback_api_key": "near"}
+        sid, sent_to = recorder.deliver("[00:00] a long enough transcript to be accepted", 120, cfg)
+    finally:
+        stop()
+    assert sid == "cd" * 16 and sent_to["api_url"] == url and sent_to["api_key"] == "near"
+    assert UNDELIVERED.read_text().split() == ["cd" * 16], "the meeting was not listed to pass on"
+
+
+def t_primary_first():
+    UNDELIVERED.unlink(missing_ok=True)
+    url, stop = serve(lambda h: reply(h, 202, {"session_id": "ef" * 16}))
+    try:
+        cfg = {**recorder.DEFAULT_CONFIG, "api_url": url, "api_key": "far",
+               "fallback_api_url": "http://127.0.0.1:9", "fallback_api_key": "near"}
+        sid, sent_to = recorder.deliver("[00:00] a long enough transcript to be accepted", 120, cfg)
+    finally:
+        stop()
+    assert sid == "ef" * 16 and sent_to["api_url"] == url
+    assert not UNDELIVERED.exists(), "a meeting the main server took was listed to pass on"
+
+
+def t_no_fallback():
+    cfg = {**recorder.DEFAULT_CONFIG, "api_url": "http://127.0.0.1:9", "api_key": "far"}
+    try:
+        recorder.deliver("[00:00] a long enough transcript to be accepted", 120, cfg)
+    except Exception:
+        return
+    raise AssertionError("with no fallback, a failed upload was reported as success")
+
+
+check("the main server is down: the fallback takes it and it is listed to pass on", t_fallback)
+check("the main server answers: the fallback is not used", t_primary_first)
+check("no fallback set: the failure is still reported", t_no_fallback)
+
 print()
 total = _passed + len(_failed)
 if _failed:

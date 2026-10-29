@@ -50,7 +50,7 @@ Both are bundled in `dashboard/vendor/` (see its README). The rest is plain Java
 |---------|---------|---------|
 | [PyInstaller](https://github.com/pyinstaller/pyinstaller) | Packs the app into `Notewell.exe` | GPL-2.0 with an exception that allows packing any program |
 | [Inno Setup](https://jrsoftware.org/isinfo.php) | Builds `Notewell-Setup.exe` | Inno Setup licence (free) |
-| Microsoft Edge (already on Windows) | The app window | — |
+| [Qt for Python (PySide6)](https://doc.qt.io/qtforpython-6/) | The app window, with Qt WebEngine (Chromium) inside | LGPL-3.0; shipped as separate files in the install folder, so they can be replaced |
 
 ## AI services you can choose
 

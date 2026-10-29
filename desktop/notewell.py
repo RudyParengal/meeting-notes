@@ -3,7 +3,7 @@ r"""Notewell - the meeting recorder and the notes dashboard as one Windows app.
 One process does everything:
   - the notes server (backend/), reachable from this computer only
   - the recorder (windows-recorder/), as the tray icon
-  - an app window (Microsoft Edge in app mode) showing the dashboard
+  - its own app window (desktop/window.py) showing the dashboard; no browser needed
 
 Everything Notewell keeps is in %USERPROFILE%\Notewell: notes, AI settings,
 the recorder's config and logs. It never touches the standalone recorder's
@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import secrets
-import shutil
 import socket
 import subprocess
 import sys
@@ -28,7 +27,6 @@ import threading
 import time
 import traceback
 import urllib.request
-import webbrowser
 from pathlib import Path
 
 # Source checkout: the repository. Installed (PyInstaller): the bundle folder,
@@ -68,12 +66,21 @@ def show_error(text: str) -> None:
 
 
 def master_key() -> str:
+    """Kept in app.key locked to this Windows user (backend/sealed.py). A key
+    saved by an older version in plain text is locked the first time it is read."""
+    import sealed
     if KEY_FILE.exists():
-        key = KEY_FILE.read_text(encoding="utf-8").strip()
+        saved = KEY_FILE.read_text(encoding="utf-8").strip()
+        try:
+            key = sealed.unseal(saved)
+        except (OSError, ValueError):
+            key = ""                  # locked by another user or PC: start a new key
         if len(key) >= 24:
+            if saved == key and sealed.available():
+                KEY_FILE.write_text(sealed.seal(key), encoding="utf-8")
             return key
     key = "mn_" + secrets.token_hex(24)
-    KEY_FILE.write_text(key, encoding="utf-8")
+    KEY_FILE.write_text(sealed.seal(key), encoding="utf-8")
     return key
 
 
@@ -88,33 +95,49 @@ def pick_port() -> int:
     raise RuntimeError("no free port on 127.0.0.1")
 
 
-def prepare_recorder_config(port: int, key: str) -> None:
-    """Point the recorder at this app's server. Every start, because the port can change."""
+def prepare_recorder_config(port: int, key: str) -> dict:
+    """Point the recorder at this app's server. Every start, because the port can change.
+    Linked to a server of your own (linked_server.py): meetings go there first,
+    and to this app only when that server does not answer.
+    The keys are returned, for recorder.KEYS, and never written to config.json."""
+    import linked_server
     path = HOME / "recorder" / "config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     cfg = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else dict(FIRST_RUN)
-    cfg.update(api_url=f"http://127.0.0.1:{port}", api_key=key)
+    here = f"http://127.0.0.1:{port}"
+    linked = HOME / "linked-server.json"
+    if linked.exists():
+        far = linked_server.read_link(HOME)
+        cfg.update(api_url=far["url"].rstrip("/"), fallback_api_url=here)
+        keys = {"api_key": far["api_key"], "fallback_api_key": key}
+    else:
+        cfg["api_url"] = here
+        cfg.pop("fallback_api_url", None)
+        keys = {"api_key": key}
+    for k in ("api_key", "fallback_api_key"):     # older versions wrote them here
+        cfg.pop(k, None)
     path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    return keys
 
 
-def find_edge():
-    for base in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"):
-        if os.environ.get(base):
-            exe = Path(os.environ[base]) / "Microsoft" / "Edge" / "Application" / "msedge.exe"
-            if exe.exists():
-                return str(exe)
-    return shutil.which("msedge")
+_windows = []
 
 
 def open_window(url: str) -> None:
-    """Edge in app mode: its own window and taskbar entry, no tabs or address bar.
-    Its own profile folder, so it shares nothing with the person's browsing."""
-    edge = find_edge()
-    if edge:
-        subprocess.Popen([edge, f"--app={url}", f"--user-data-dir={HOME / 'window'}",
-                          "--window-size=1280,860", "--no-first-run"])
-    else:
-        webbrowser.open(url)
+    """Notewell's own window (desktop/window.py), a second copy of this program.
+    The address carries the sign-in token, so it goes in the environment, which
+    only this Windows user can read, not on the command line."""
+    if os.name == "nt":
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)   # let the window come to the front
+    args = [sys.executable, "--window"] if getattr(sys, "frozen", False) \
+        else [sys.executable, str(Path(__file__).resolve()), "--window"]
+    _windows.append(subprocess.Popen(args, env={**os.environ, "NOTEWELL_WINDOW_URL": url}))
+
+
+def close_windows() -> None:
+    for p in _windows:
+        if p.poll() is None:
+            p.terminate()
 
 
 def open_running_copy() -> None:
@@ -133,6 +156,7 @@ def open_running_copy() -> None:
 
 
 def run() -> None:
+    sys.path[:0] = [str(ROOT / "backend"), str(ROOT / "windows-recorder")]
     HOME.mkdir(parents=True, exist_ok=True)
     console = sys.stdout is not None
     if not console:                               # the installed app has no console
@@ -152,11 +176,12 @@ def run() -> None:
         "ALLOW_UNCONFIGURED_AI": "1",             # the AI is chosen on the Settings screen
         "TOKEN_TTL_HOURS": "720",                 # the window stays signed in for 30 days
         "HOST": "127.0.0.1",
+        "ALLOWED_HOSTS": "127.0.0.1,localhost",   # see backend/config.py
         "PORT": str(port),
         "ADMIN_EMAIL": ADMIN,
         "HF_HUB_DISABLE_SYMLINKS_WARNING": "1",   # harmless on Windows, alarming in a log
     })
-    prepare_recorder_config(port, key)
+    recorder_keys = prepare_recorder_config(port, key)
     # The server and the recorder each call logging.basicConfig and only the
     # first call counts. Without this the server's came first and the recorder's
     # log - the one its "View logs" opens - stayed empty. One log for both.
@@ -165,17 +190,22 @@ def run() -> None:
         handlers.append(logging.StreamHandler())
     logging.basicConfig(level=logging.INFO, handlers=handlers,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    sys.path[:0] = [str(ROOT / "backend"), str(ROOT / "windows-recorder")]
 
     import uvicorn
     server = importlib.import_module("main")     # backend/main.py
     import recorder
     import recorder_bridge
     recorder.ARCHIVE_ROOT = HOME / "archive"      # not the standalone recorder's MeetingArchive
+    recorder.KEYS.update(recorder_keys)
 
     srv = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=port,
                                         log_config=None, access_log=False))
     threading.Thread(target=srv.run, daemon=True, name="server").start()
+    try:
+        import linked_server
+        linked_server.start(HOME, server.storage, ADMIN)
+    except Exception:
+        logging.getLogger("linked").exception("linked-server.json could not be used")
     held = {}
 
     def warm_up(ctl):
@@ -211,10 +241,15 @@ def run() -> None:
     mgr = held.get("manager")
     while mgr is not None and mgr.processing:
         time.sleep(1)
+    close_windows()
     srv.should_exit = True
 
 
 if __name__ == "__main__":
+    if "--window" in sys.argv:                    # the app window, started by open_window
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import window
+        sys.exit(window.main())
     try:
         run()
     except SystemExit as e:

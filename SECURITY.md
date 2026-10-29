@@ -17,14 +17,18 @@ Please do **not** open a public issue for a security problem. Use GitHub's **Rep
 | **Each person's meetings** | On a team server, a person sees only their own meetings. Only the admin sees everyone's. |
 | **Notes shown in the page** | AI output is cleaned (DOMPurify) before it is displayed, so text in a transcript cannot run code in your browser. |
 | **Browser libraries** | Bundled in `dashboard/vendor/` — nothing loaded from a CDN. |
-| **The app window** | Opens in its own Edge profile (`%USERPROFILE%\Notewell\window`), separate from your normal browsing. |
+| **The app window** | Notewell's own window, not a browser. It opens only pages from this computer's own server; any other link opens in your normal browser instead. One window per Windows user. |
+| **Keys kept on disk** | The app's own key (`app.key`), your AI key (`data\settings.json`) and a linked server's key are locked to your Windows account (Windows DPAPI). Copied to another PC or read by another user, the files are useless. The recorder's `config.json` holds no key at all. |
+| **Requests from web pages** | The app answers only requests addressed to `127.0.0.1` or `localhost`, so a website cannot reach it by pointing its own name at your computer. Uploads must say their size and stay under the limit. |
+| **Releases** | Built by GitHub from a tagged commit, with every build step pinned. Each release lists the installer's SHA-256 and carries a signed build record (`gh attestation verify`). |
 
 ## What is your job
 
 | Area | Why it matters |
 |---|---|
-| **Your AI key is stored as plain text** | In `%USERPROFILE%\Notewell\data\settings.json` (Windows app) or `backend/.env` (server). Anyone who can read your user folder can read it. Use a key you can revoke, and revoke it if the computer is lost. |
-| **The app's own key is stored as plain text** | In `%USERPROFILE%\Notewell\app.key` and the recorder's `config.json`. It opens every meeting in the app. Do not share those files. |
+| **Your Windows account** | The locked keys open for anything running as you. Malware on your account can read them, and your meetings. Keep Windows updated and do not run programs you do not trust. Use an AI key you can revoke, and revoke it if the computer is lost. |
+| **A team server's key** | Kept as plain text in `backend/.env` on the server. Only the account that runs the server should be able to read that file. |
+| **Your meetings are not encrypted on disk** | They are ordinary files in `%USERPROFILE%\Notewell\data`. Turn on BitLocker (or Device Encryption) so a lost laptop does not give them away. |
 | **The transcript text goes to the AI you choose** | Read that provider's terms. Some free plans may use your data for training unless you switch it off. For confidential meetings use a local model (Ollama). |
 | **Telling people you are recording** | Required by law in many places. |
 | **A team server on the internet** | Put it behind HTTPS (see [docs/INSTALL.md](docs/INSTALL.md)) and keep the server updated. |

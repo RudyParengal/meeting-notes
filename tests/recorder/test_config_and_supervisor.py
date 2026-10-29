@@ -152,10 +152,29 @@ def t_safe_defaults_for_a_public_tool():
     assert d["api_url"].startswith("http://127.0.0.1")
 
 
+def t_keys_handed_over_in_memory_are_never_written():
+    """The Notewell app passes its keys in recorder.KEYS; saving a setting must not
+    put them in config.json. The standalone recorder (KEYS empty) keeps its own."""
+    recorder.CONFIG_PATH.write_text(json.dumps({"whisper_model": "small"}), encoding="utf-8")
+    fake = "mn" + "_in_memory_only_0123456789"     # made up; split so secret scanners skip it
+    recorder.KEYS.update(api_key=fake)
+    try:
+        cfg = recorder.load_config()
+        assert cfg["api_key"] == fake
+        cfg["auto_detect"] = True
+        recorder.write_config(cfg)
+        assert "mn_in_memory_only" not in recorder.CONFIG_PATH.read_text(encoding="utf-8")
+    finally:
+        recorder.KEYS.clear()
+    recorder.write_config({**GOOD})
+    assert GOOD["api_key"] in recorder.CONFIG_PATH.read_text(encoding="utf-8")
+
+
 check("a byte-order mark in config.json is tolerated", t_bom_is_tolerated)
 check("settings added in newer versions are merged in", t_new_settings_are_merged_in)
 check("a broken config.json is reported, never overwritten", t_broken_json_never_overwrites_the_file)
 check("the shipped defaults are safe and generic", t_safe_defaults_for_a_public_tool)
+check("keys given in memory never reach config.json", t_keys_handed_over_in_memory_are_never_written)
 
 # ---------------------------------------------------------------------------
 print("\nModel download is checksum-verified")

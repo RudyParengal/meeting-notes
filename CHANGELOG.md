@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.2.0 — Its own window, keys locked away (2026-10-29)
+
+**Notewell no longer needs Microsoft Edge.** It has its own window, with its own icon on the taskbar.
+
+### New
+- **Notewell's own window** (Qt), not a browser app. The taskbar shows Notewell, and opening it again brings the same window back.
+- **Link a server of your own** (optional). Put its address and key in `%USERPROFILE%\Notewell\linked-server.json` and every note on that server is copied to this PC once a minute, with tags and trash kept in step both ways. Meetings are sent to that server first; if it does not answer, they are kept here and sent later. Nothing on this PC is ever deleted by a sync.
+
+### Security
+- **Keys on disk are locked to your Windows account** (DPAPI): the app's own key, your AI key and a linked server's key. Keys saved by 2.1 are locked the first time 2.2 starts. The recorder's `config.json` no longer holds any key.
+- **The app answers only requests addressed to `127.0.0.1` or `localhost`**, so a web page cannot reach it by pointing its own name at your computer. Uploads with no stated size, or over the limit, are refused before they are read.
+- **Links in notes open only if they are web or email links.** A `file://` or similar link could otherwise start a program.
+- **Releases**: every build step is pinned to an exact version, the build has read-only access, and each release lists the installer's SHA-256 with a signed build record (`gh attestation verify`).
+
+### Changed
+- Parts of Qt the app never uses (about 100 MB) are left out of the install.
+
 ## 2.1.0 — Notewell (2026-10-29)
 
 **Now a Windows app with an installer.** Download `Notewell-Setup-2.1.0.exe`, double-click, and it runs — no Python, no command line.

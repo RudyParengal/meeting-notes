@@ -14,7 +14,7 @@
 
 ## Install on Windows (about 5 minutes)
 
-1. Download **`Notewell-Setup-x.y.z.exe`** from the [latest release](https://github.com/RudyParengal/meeting-notes/releases/latest).
+1. Download **`Notewell-Setup-x.y.z.exe`** from the [latest release](https://github.com/RudyParengal/meeting-notes/releases/latest). Only from there: the release notes list the file's SHA-256, so you can check it with `Get-FileHash` in PowerShell.
 2. Double-click it. Windows may say **"Windows protected your PC"** — the installer is not code-signed. Click **More info → Run anyway**.
 3. Click **Next** until it finishes. Leave **"Open Notewell now"** ticked.
 4. Notewell opens in its own window and signs you in. The first start downloads the speech model (about 500 MB) — give it a few minutes on a slow connection.

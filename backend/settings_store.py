@@ -5,15 +5,18 @@ desktop app has no .env: the person picks a provider on the Settings screen
 and it is stored here. Environment variables always win, so adding this file
 cannot change how an existing server behaves.
 
-The file holds an API key in plain text, exactly as backend/.env does. It lives
-in the user's own data folder and is never sent anywhere except the provider.
+On Windows the API key is saved locked to the Windows user (sealed.py), so the
+file is useless if copied off this computer. Elsewhere it is plain text,
+exactly as backend/.env is. It is never sent anywhere except the provider.
 """
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
 
 import config
+import sealed
 
 SETTINGS_FILE = config.DATA_DIR / "settings.json"
 
@@ -74,12 +77,23 @@ def load() -> dict:
 
 def ai() -> dict:
     a = load().get("ai")
-    return a if isinstance(a, dict) else {}
+    if not isinstance(a, dict):
+        return {}
+    a = dict(a)
+    try:
+        a["api_key"] = sealed.unseal(a.get("api_key", ""))
+    except (OSError, ValueError):
+        # Saved by another Windows user or PC: behave as "no key yet", and the
+        # Settings screen asks for one.
+        logging.getLogger("settings").warning("the saved AI key cannot be unlocked here")
+        a["api_key"] = ""
+    return a
 
 
 def save_ai(provider: str, base_url: str, model: str, api_key: str) -> None:
     data = load()
-    data["ai"] = {"provider": provider, "base_url": base_url, "model": model, "api_key": api_key}
+    data["ai"] = {"provider": provider, "base_url": base_url, "model": model,
+                  "api_key": sealed.seal(api_key)}
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(SETTINGS_FILE.parent), suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as f:

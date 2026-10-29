@@ -54,8 +54,10 @@ Everything is under `%USERPROFILE%\Notewell`:
 | `data\` | Your meetings (one JSON file each), trash, `settings.json` (the AI you chose, including its key) |
 | `recorder\` | Recorder `config.json` and `recorder.log` |
 | `archive\` | Audio kept while it is being processed, and recovered recordings |
-| `window\` | The app window's own Edge profile |
-| `app.key` | The app's own key (the server and recorder use it to talk to each other) |
+| `window-qt\` | The app window's own storage (sign-in, cache), separate from any browser |
+| `app.key` | The app's own key (the server and recorder use it to talk to each other), locked to this Windows user |
+| `linked-server.json` | Only if you link a server of your own: its address and key (the key locked on first read) |
+| `linked-state.json` | What the last sync with that server saw, so the next one knows which side changed |
 | `port` | Which local port the app is on (usually 8767) |
 | `notewell.log` | Start-up errors |
 

@@ -19,7 +19,7 @@ REPO = HERE.parent
 # container or systemd unit can override anything without editing it.
 load_dotenv(HERE / ".env", override=False)
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 # Values that mean "the person copied .env.example and never filled it in".
 _PLACEHOLDERS = {
@@ -97,6 +97,11 @@ EXPORT_FOLDER = env("EXPORT_FOLDER")
 # Set to 1 only if a reverse proxy in front of this server already authenticates
 # every request AND passes the original client address in X-Forwarded-For.
 TRUST_PROXY = env("TRUST_PROXY") == "1"
+
+# The names this server answers to (the Host header), comma-separated; * = any.
+# The desktop app sets 127.0.0.1,localhost, so a web page elsewhere that points
+# its own name at this computer (DNS rebinding) is refused.
+ALLOWED_HOSTS = [h.strip().lower() for h in env("ALLOWED_HOSTS", "*").split(",") if h.strip()]
 
 # Set by the Notewell desktop app. The server then starts with no AI chosen
 # yet - the person picks one on the Settings screen - and a meeting that

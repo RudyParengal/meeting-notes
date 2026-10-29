@@ -76,6 +76,24 @@ CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline';
 
 
 @app.middleware("http")
+async def checked_before_reading(request: Request, call_next):
+    """Refused before any of the request is read: a Host this server does not
+    answer to, and an upload larger than the limit (not spooled to disk first)."""
+    if config.ALLOWED_HOSTS != ["*"]:
+        host = request.headers.get("host", "").rsplit(":", 1)[0].lower()
+        if host not in config.ALLOWED_HOSTS:
+            return JSONResponse(status_code=400, content={"detail": "unknown host"})
+    if request.url.path == "/upload-audio" and request.method == "POST":
+        size = request.headers.get("content-length", "")
+        if not size.isdigit():
+            return JSONResponse(status_code=411, content={"detail": "Content-Length required"})
+        if int(size) > (config.MAX_UPLOAD_MB + 1) * 1024 * 1024:   # +1 MB for the form around the file
+            return JSONResponse(status_code=413, content={
+                "detail": f"File larger than {config.MAX_UPLOAD_MB} MB"})
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def security_headers(request: Request, call_next):
     resp = await call_next(request)
     resp.headers["X-Content-Type-Options"] = "nosniff"

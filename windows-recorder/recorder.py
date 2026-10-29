@@ -148,7 +148,7 @@ def load_config():
     """
     if not CONFIG_PATH.exists():
         CONFIG_PATH.write_text(json.dumps(DEFAULT_CONFIG, indent=2), encoding="utf-8")
-        return DEFAULT_CONFIG.copy()
+        return {**DEFAULT_CONFIG, **KEYS}
     try:
         cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
     except ValueError as e:
@@ -159,7 +159,19 @@ def load_config():
     # Merge in any new defaults
     for k, v in DEFAULT_CONFIG.items():
         cfg.setdefault(k, v)
+    cfg.update(KEYS)
     return cfg
+
+
+# Keys the Notewell app hands over in memory (desktop/notewell.py), so they are
+# never written to config.json. Empty for the standalone recorder, which keeps
+# its key in the file as it always has.
+KEYS = {}
+
+
+def write_config(cfg):
+    CONFIG_PATH.write_text(json.dumps({k: v for k, v in cfg.items() if k not in KEYS}, indent=2),
+                           encoding="utf-8")
 
 
 def setup_logging():
@@ -652,6 +664,24 @@ def upload(transcript, duration, cfg, meeting_type="auto"):
     return body.get("session_id", session_id)
 
 
+def deliver(transcript, duration, cfg, meeting_type="auto"):
+    """upload(), with a second server to fall back on (fallback_api_url and
+    fallback_api_key in config.json - the Notewell app sets them). A meeting
+    the fallback took is listed in undelivered.txt so it can be passed on to
+    the first server later. Returns (session_id, the config it went to)."""
+    try:
+        return upload(transcript, duration, cfg, meeting_type), cfg
+    except Exception as e:
+        if not cfg.get("fallback_api_url"):
+            raise
+        log.warning(f"server did not take the meeting ({e}) - trying the fallback")
+    alt = {**cfg, "api_url": cfg["fallback_api_url"], "api_key": cfg.get("fallback_api_key", "")}
+    session_id = upload(transcript, duration, alt, meeting_type)
+    with open(APPDIR / "undelivered.txt", "a", encoding="utf-8") as f:
+        f.write(session_id + "\n")
+    return session_id, alt
+
+
 def poll_for_completion(session_id, cfg, timeout=300):
     """Poll the server until processing is complete (max timeout seconds)."""
     import requests
@@ -960,7 +990,7 @@ class MeetingManager:
 
             self.notify("Uploading...", "Sending transcript to your server for AI analysis.")
             try:
-                session_id = upload(transcript, duration, self.cfg)
+                session_id, sent_to = deliver(transcript, duration, self.cfg)
                 log.info(f"Uploaded session: {session_id}")
                 # The transcript is safely on the server, so the raw audio no
                 # longer needs to sit in the roaming profile. Order matters:
@@ -976,7 +1006,7 @@ class MeetingManager:
                 self._live_window.close()
                 self._live_window = None
             if self.cfg.get("notify_on_complete", True):
-                result = poll_for_completion(session_id, self.cfg)
+                result = poll_for_completion(session_id, sent_to)
                 if result:
                     self.notify("Meeting processed", f"Type: {result.get('meeting_type')} - open dashboard to view")
                 else:
@@ -1023,7 +1053,7 @@ def recover_orphan(session_dir, cfg, notify):
         log.warning("recovered transcript too short - keeping the spool")
         notify("Nothing to recover", "No speech found in the unfinished recording.")
         return None
-    session_id = upload(transcript, duration, cfg)
+    session_id, _ = deliver(transcript, duration, cfg)
     log.info("Recovered session uploaded: %s", session_id)
     spool.discard(session_dir)
     notify("Meeting recovered", "The unfinished recording is on the dashboard.")
@@ -1205,7 +1235,7 @@ def _controller(mgr, cfg, icon, icon_idle, icon_rec):
         icon.icon = icon_idle
 
     def save_cfg():
-        CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+        write_config(cfg)
 
     return dict(manager=mgr, cfg=cfg, start=start, stop=stop,
                 devices=list_speakers, save_cfg=save_cfg)
@@ -1332,12 +1362,12 @@ def main(hooks=None):
 
     def auto_detect_toggle(icon_, item):
         cfg["auto_detect"] = not cfg["auto_detect"]
-        CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+        write_config(cfg)
         notify("Auto-detect", "enabled" if cfg["auto_detect"] else "disabled")
 
     def live_transcript_toggle(icon_, item):
         cfg["live_transcript"] = not cfg.get("live_transcript", False)
-        CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+        write_config(cfg)
         if cfg["live_transcript"] and not cfg.get("spool_enabled", False):
             notify("Live transcript",
                    "Turned on, but it also needs spool_enabled to be on.")
@@ -1382,7 +1412,7 @@ def main(hooks=None):
     def _make_source_picker(device_name):
         def _pick(icon_, item):
             cfg["audio_source"] = device_name
-            CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+            write_config(cfg)
             # Update the live capture so next recording uses new source
             if hasattr(mgr, 'capture'):
                 mgr.capture._audio_source = device_name
