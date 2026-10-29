@@ -19,7 +19,7 @@ REPO = HERE.parent
 # container or systemd unit can override anything without editing it.
 load_dotenv(HERE / ".env", override=False)
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 # Values that mean "the person copied .env.example and never filled it in".
 _PLACEHOLDERS = {
@@ -97,6 +97,12 @@ EXPORT_FOLDER = env("EXPORT_FOLDER")
 # Set to 1 only if a reverse proxy in front of this server already authenticates
 # every request AND passes the original client address in X-Forwarded-For.
 TRUST_PROXY = env("TRUST_PROXY") == "1"
+
+# Set by the Notewell desktop app. The server then starts with no AI chosen
+# yet - the person picks one on the Settings screen - and a meeting that
+# arrives before that fails with a message saying so, transcript kept.
+# A server install leaves this off and still refuses to start without an AI.
+ALLOW_UNCONFIGURED_AI = env("ALLOW_UNCONFIGURED_AI") == "1"
 
 
 def load_api_key() -> str:

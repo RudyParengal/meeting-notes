@@ -118,17 +118,26 @@ TRANSCRIPT:
 {transcript}
 """
 
-def summary_prompt(transcript, meeting_type, duration_min, date_str):
+def _with_context(hint, context):
+    """Add what the person typed in "Add context for the AI", if anything."""
+    context = (context or "").strip()
+    if not context:
+        return hint
+    return (hint + "\n\nContext from someone who was in the meeting. Use it for names, spellings "
+            "and purpose; it overrides the transcript where they disagree:\n" + context[:4000])
+
+def summary_prompt(transcript, meeting_type, duration_min, date_str, context=""):
     hint = TEMPLATE_SUMMARY_HINTS.get(meeting_type, TEMPLATE_SUMMARY_HINTS['generic'])
     return SUMMARY_PROMPT.format(
         transcript=transcript, meeting_type=meeting_type,
         duration_min=duration_min, date_str=date_str,
-        template_hint=hint
+        template_hint=_with_context(hint, context)
     )
 
-def action_prompt(transcript, meeting_type):
+def action_prompt(transcript, meeting_type, context=""):
     hint = TEMPLATE_ACTION_HINTS.get(meeting_type, TEMPLATE_ACTION_HINTS['generic'])
-    return ACTION_ITEMS_PROMPT.format(transcript=transcript, meeting_type=meeting_type, template_hint=hint)
+    return ACTION_ITEMS_PROMPT.format(transcript=transcript, meeting_type=meeting_type,
+                                      template_hint=_with_context(hint, context))
 
 def classify_prompt(transcript):
     head = transcript[:2000]

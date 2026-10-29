@@ -54,11 +54,11 @@ It asks which AI provider you use and creates `backend\.env`. It generates a str
 Prefer to skip the questions?
 
 ```powershell
-$env:GEMINI_API_KEY = "paste-your-key"      # typed once in this window only
-venv\Scripts\python scripts\setup-env.py --provider gemini --llm-key-env GEMINI_API_KEY
+$env:MISTRAL_API_KEY = "paste-your-key"     # typed once in this window only
+venv\Scripts\python scripts\setup-env.py --provider mistral --llm-key-env MISTRAL_API_KEY
 ```
 
-Other choices: `--provider openai | groq | deepseek | ollama | mock | custom`. No key at all? Use `mock` (a fake AI) or `ollama` (a model on your own computer).
+Other choices: `--provider gemini | openai | groq | deepseek | ollama | mock | custom`. Mistral's free plan is the easiest start (key: [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys)). No key at all? Use `mock` (a fake AI) or `ollama` (a model on your own computer).
 
 ### 4. Start the server and check it
 

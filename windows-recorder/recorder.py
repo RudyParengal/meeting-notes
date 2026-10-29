@@ -41,6 +41,7 @@ DEFAULT_CONFIG = {
     "api_key": "",                       # your server's MEETING_NOTES_API_KEY
     "allow_insecure_http": False,        # true = allow plain http:// to another computer (not recommended)
     "whisper_model": "distil-large-v3",  # options: tiny, base, small, medium, large-v3, distil-large-v3
+    "language": "",                      # "" = detect; or "en", "de", ... (distil-large-v3 is English only)
     "whisper_compute_type": "int8",      # int8 is fastest CPU, use "float16" with GPU
     "whisper_device": "cpu",             # "cpu" or "cuda"
     "sample_rate": 16000,
@@ -94,6 +95,9 @@ SPOOL_ROOT = APPDIR / "spool"
 RECORDER_ALIVE = APPDIR / "recorder.alive"
 SUPERVISOR_ALIVE = APPDIR / "supervisor.alive"
 SUPERVISOR_LAUNCHER = HERE / "start-supervisor.vbs"
+# True when the Notewell desktop app runs this recorder in its own process
+# (set by main(hooks=...)). The standalone tray app leaves it False.
+EMBEDDED = False
 ARCHIVE_ROOT = Path.home() / "MeetingArchive"
 
 
@@ -292,6 +296,9 @@ class DualAudioCapture:
         self._system_failed = None  # set if system audio thread crashes
         self._mic_failed = None     # set if mic audio thread crashes
         self._audio_source = "default"  # name of output device to loopback-capture; "default" uses default speaker
+        # Loudness of the last 1-second chunk, for the dashboard's level meter.
+        self.level_system = 0.0
+        self.level_mic = 0.0
         # Silence detection state
         self._silence_consecutive = 0
         self._silence_alerted = False
@@ -348,6 +355,7 @@ class DualAudioCapture:
                         self._store("sys", data)
                         # Silence detection on system audio
                         rms = np.sqrt(np.mean(data ** 2))
+                        self.level_system = float(rms)
                         self._check_silence(rms)
             except Exception as e:
                 log.exception(f"System audio capture failed: {e}")
@@ -365,6 +373,7 @@ class DualAudioCapture:
                     while self.recording:
                         data = rec.record(numframes=self.sample_rate)
                         self._store("mic", data)
+                        self.level_mic = float(np.sqrt(np.mean(data ** 2)))
             except Exception as e:
                 log.warning(f"Microphone capture failed (falling back to system-only): {e}")
                 self._mic_available = False
@@ -425,6 +434,7 @@ class DualAudioCapture:
     def stop(self):
         import numpy as np
         self.recording = False
+        self.level_system = self.level_mic = 0.0
         if self._system_thread:
             self._system_thread.join(timeout=3)
         if self._mic_thread:
@@ -478,9 +488,13 @@ class DualAudioCapture:
 _whisper_model = None
 
 
+_whisper_name = None
+
+
 def get_whisper(cfg):
-    global _whisper_model
-    if _whisper_model is None:
+    global _whisper_model, _whisper_name
+    # Reload if the dashboard changed the model since it was loaded.
+    if _whisper_model is None or _whisper_name != cfg["whisper_model"]:
         from faster_whisper import WhisperModel
         # Prefer the locally-bundled model (no symlink/admin issues on Windows)
         local_path = Path(__file__).parent / "models" / cfg["whisper_model"]
@@ -490,7 +504,10 @@ def get_whisper(cfg):
             model_id,
             device=cfg["whisper_device"],
             compute_type=cfg["whisper_compute_type"],
+            # The installed app keeps downloaded models in its own data folder.
+            download_root=str(APPDIR / "models") if EMBEDDED else None,
         )
+        _whisper_name = cfg["whisper_model"]
         log.info("Whisper model loaded successfully")
     return _whisper_model
 
@@ -514,6 +531,8 @@ def transcribe(audio, cfg, speaker_label=None, speaker_at=None):
     model = get_whisper(cfg)
     initial_prompt = _build_initial_prompt(cfg)
     kwargs = dict(beam_size=5, vad_filter=True)
+    if cfg.get("language"):
+        kwargs["language"] = cfg["language"]
     if initial_prompt:
         kwargs["initial_prompt"] = initial_prompt
     segments, info = model.transcribe(audio, **kwargs)
@@ -764,12 +783,18 @@ class MeetingManager:
         # True when the current recording was started by the auto-detect poller
         # (so manual Stop can distinguish auto vs. user-started sessions).
         self._started_by_auto = False
+        # Read by the Notewell dashboard: recording timer, "transcribing" state,
+        # and whether the speech model has finished downloading.
+        self.started_at = None
+        self.processing = False
+        self.model_ready = False
 
     def start(self, by_auto=False):
         if self.in_meeting:
             self.notify("Already recording", "A meeting is already in progress.")
             return
         self.in_meeting = True
+        self.started_at = time.time()
         self._started_by_auto = by_auto
         try:
             self.capture.start()
@@ -800,7 +825,14 @@ class MeetingManager:
         self._started_by_auto = False
         if self.cfg.get("sound_effects", True):
             play_stop_sound()
-        threading.Thread(target=self._finish, daemon=True).start()
+        self.processing = True
+        threading.Thread(target=self._finish_tracked, daemon=True).start()
+
+    def _finish_tracked(self):
+        try:
+            self._finish()
+        finally:
+            self.processing = False
 
     def _start_live_view(self):
         """Open the live transcript window, if it is wanted and possible.
@@ -1026,7 +1058,8 @@ def heartbeat_loop(notify=None):
     while True:
         _touch(RECORDER_ALIVE)
         now = time.time()
-        if now - checked_at >= 300:
+        # Inside the Notewell app there is no supervisor to revive.
+        if not EMBEDDED and now - checked_at >= 300:
             checked_at = now
             try:
                 age = _age_seconds(SUPERVISOR_ALIVE)
@@ -1152,14 +1185,48 @@ def _acquire_single_instance_lock():
         return True  # Don't block startup on lock issues
 
 
-def main():
+def list_speakers():
+    """Output devices the recorder can capture, for the dashboard's picker."""
+    import soundcard as sc
+    default_name = sc.default_speaker().name
+    return ([{"id": "default", "name": f"Default ({default_name})"}]
+            + [{"id": s.name, "name": s.name} for s in sc.all_speakers()])
+
+
+def _controller(mgr, cfg, icon, icon_idle, icon_rec):
+    """What the Notewell dashboard drives. Start and stop also recolour the tray
+    icon, so it is right whichever side pressed the button."""
+    def start():
+        mgr.start()
+        icon.icon = icon_rec if mgr.in_meeting else icon_idle
+
+    def stop():
+        mgr.stop()
+        icon.icon = icon_idle
+
+    def save_cfg():
+        CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+
+    return dict(manager=mgr, cfg=cfg, start=start, stop=stop,
+                devices=list_speakers, save_cfg=save_cfg)
+
+
+def main(hooks=None):
+    """Run the tray app. `hooks` is given only by the Notewell desktop app:
+        on_ready(controller)  called once, just before the tray loop starts
+        open_dashboard()      replaces opening api_url in the browser
+        open_settings()       replaces opening config.json in Notepad
+    """
+    global EMBEDDED
+    EMBEDDED = hooks is not None
     setup_logging()
     # The first thing written, before anything that can fail. If startup did its
     # work (config, tray icon, audio devices) before logging, a failure in any of
     # it would leave recorder.log empty and nothing to diagnose.
     log.info("startup: process alive, pid=%s", os.getpid())
 
-    if not _acquire_single_instance_lock():
+    # Notewell keeps itself to one copy before it gets here.
+    if not EMBEDDED and not _acquire_single_instance_lock():
         # Already running — show a Windows balloon so the user knows it's alive.
         # Users often can't find the tray icon (Win11 hides it) and think the app failed.
         log.info("Meeting Recorder already running — showing notification to user")
@@ -1244,10 +1311,16 @@ def main():
         threading.Thread(target=_run, daemon=True).start()
 
     def on_dashboard(icon_, item):
-        webbrowser.open(cfg["api_url"])
+        if hooks:
+            hooks["open_dashboard"]()
+        else:
+            webbrowser.open(cfg["api_url"])
 
     def on_settings(icon_, item):
-        subprocess.Popen(["notepad", str(CONFIG_PATH)])
+        if hooks:
+            hooks["open_settings"]()
+        else:
+            subprocess.Popen(["notepad", str(CONFIG_PATH)])
 
     def on_logs(icon_, item):
         subprocess.Popen(["notepad", str(LOG_PATH)])
@@ -1379,15 +1452,18 @@ def main():
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Recover unfinished meeting", on_recover,
                          visible=lambda i: bool(spool.list_orphans(SPOOL_ROOT))),
-        pystray.MenuItem("Open Dashboard", on_dashboard),
-        pystray.MenuItem("Settings (config.json)", on_settings),
+        pystray.MenuItem("Open Notewell" if hooks else "Open Dashboard", on_dashboard, default=bool(hooks)),
+        pystray.MenuItem("Settings" if hooks else "Settings (config.json)", on_settings),
         pystray.MenuItem("View logs", on_logs),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit", on_quit),
     )
 
     log.info("startup: tray menu built")
-    icon = pystray.Icon("meeting-recorder", icon_idle, "Meeting Recorder", menu)
+    if hooks:
+        icon = pystray.Icon("notewell", icon_idle, "Notewell", menu)
+    else:
+        icon = pystray.Icon("meeting-recorder", icon_idle, "Meeting Recorder", menu)
 
     # Auto-detect poller with debounce
     def auto_poller():
@@ -1443,6 +1519,8 @@ def main():
     threading.Thread(target=auto_poller, daemon=True).start()
     log.info("Meeting Recorder started (dual_stream=%s, vocab=%d terms, sound=%s)",
              cfg.get("dual_stream"), len(cfg.get("custom_vocabulary", [])), cfg.get("sound_effects"))
+    if hooks:
+        hooks["on_ready"](_controller(mgr, cfg, icon, icon_idle, icon_rec))
     log.info("startup: complete, entering tray loop")
     try:
         icon.run()

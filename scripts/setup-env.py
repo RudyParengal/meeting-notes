@@ -2,7 +2,7 @@
 """Creates backend/.env for you: a fresh API key, and your choice of AI provider.
 
     python scripts/setup-env.py                       # asks you
-    python scripts/setup-env.py --provider gemini --llm-key-env GEMINI_API_KEY
+    python scripts/setup-env.py --provider mistral --llm-key-env MISTRAL_API_KEY
     python scripts/setup-env.py --provider ollama --model llama3.1      # fully local, no key
     python scripts/setup-env.py --provider mock       # try everything with no key and no cost
 
@@ -26,12 +26,14 @@ ENV_PATH = Path(__file__).resolve().parent.parent / "backend" / ".env"
 # name -> (base url, default model, needs a key, note). Model names change; if one
 # is rejected, check your provider's current list and edit LLM_MODEL in backend/.env.
 PROVIDERS = {
+    "mistral":  ("https://api.mistral.ai/v1", "ministral-14b-latest", True,
+                 "Mistral. Free plan. Key: https://console.mistral.ai/api-keys"),
     "gemini":   ("https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.5-flash", True,
                  "Google Gemini. Cheap and fast. Key: https://aistudio.google.com/apikey"),
     "openai":   ("https://api.openai.com/v1", "gpt-4o-mini", True,
                  "OpenAI. Key: https://platform.openai.com/api-keys"),
-    "groq":     ("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile", True,
-                 "Groq. Very fast. Key: https://console.groq.com/keys"),
+    "groq":     ("https://api.groq.com/openai/v1", "openai/gpt-oss-120b", True,
+                 "Groq. Very fast; free limit suits short meetings. Key: https://console.groq.com/keys"),
     "deepseek": ("https://api.deepseek.com/v1", "deepseek-chat", True,
                  "DeepSeek. Key: https://platform.deepseek.com/api_keys"),
     "ollama":   ("http://localhost:11434/v1", "llama3.1", False,

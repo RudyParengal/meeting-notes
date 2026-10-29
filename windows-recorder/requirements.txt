@@ -1,5 +1,6 @@
 # Meeting Recorder (Windows). Installed into a private virtualenv by install.ps1.
 faster-whisper>=1.0,<2      # local speech-to-text; the audio never leaves this computer
+av<19                       # PyAV 19 breaks faster-whisper 1.2.1's file reading (tests/recorder/test_audio_file.py)
 soundcard>=0.4.6            # captures the call (WASAPI loopback) and the microphone
 numpy>=1.26,<3
 pystray>=0.19.5             # the tray icon

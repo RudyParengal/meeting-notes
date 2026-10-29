@@ -1,0 +1,83 @@
+name: release
+
+# Builds Notewell-Setup-<version>.exe on Windows, checks the built app starts and
+# answers, then attaches the installer to a GitHub Release.
+#   Tag a version to publish:   git tag v1.0.0 && git push origin v1.0.0
+#   Or run it by hand from the Actions tab: builds and keeps the file, no Release.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install what the app is built from
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt -r windows-recorder/requirements.txt -r windows-recorder/requirements-diarize.txt pyinstaller==6.22.3
+          python windows-recorder/fetch_models.py
+
+      - name: Build the app
+        run: pyinstaller desktop/notewell.spec --noconfirm
+
+      - name: Check the built app starts and answers
+        shell: pwsh
+        run: |
+          $env:NOTEWELL_HOME = "$env:RUNNER_TEMP\nw-home"
+          $app = Start-Process dist\Notewell\Notewell.exe -PassThru
+          $ok = $false
+          foreach ($i in 1..90) {
+            Start-Sleep 1
+            if (Test-Path "$env:NOTEWELL_HOME\port") {
+              $port = (Get-Content "$env:NOTEWELL_HOME\port").Trim()
+              try {
+                $health = Invoke-RestMethod "http://127.0.0.1:$port/health"
+                $page = Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing
+                if ($health.status -eq "ok" -and $page.Content -match "<title>Notewell</title>") { $ok = $true; break }
+              } catch {}
+            }
+          }
+          Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+          Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { Get-Content "$env:NOTEWELL_HOME\recorder\recorder.log" -Tail 40 -ErrorAction SilentlyContinue; throw "the built app did not answer within 90 s" }
+          Write-Host "built app answered on port $port after $i s"
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.TrimStart("v") } else { "0.0.0-dev" }
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) { choco install innosetup --no-progress -y }
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DAppVersion=$version" "/DSourceDir=$pwd\dist\Notewell" desktop\installer.iss
+          if ($LASTEXITCODE) { throw "the installer did not build" }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Notewell-Setup-${{ env.VERSION }}
+          path: dist/Notewell-Setup-*.exe
+
+      - name: Attach to a Release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The release notes are this version's section of CHANGELOG.md.
+          $sections = (Get-Content CHANGELOG.md -Raw -Encoding utf8) -split "(?m)^## "
+          $notes = ($sections | Where-Object { $_ -like "$env:VERSION *" } | Select-Object -First 1)
+          if (-not $notes) { throw "CHANGELOG.md has no '## $env:VERSION' section" }
+          "## $notes" | Set-Content release-notes.md -Encoding utf8
+          gh release create "${{ github.ref_name }}" "dist/Notewell-Setup-$env:VERSION.exe" --title "Notewell $env:VERSION" --notes-file release-notes.md

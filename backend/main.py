@@ -1,8 +1,10 @@
-"""Meeting Notes API.
+"""Notewell API.
 
     POST /transcribe        a transcript in -> 202, processed in the background
     GET  /results/{id}      status + summary + action items + transcript
     GET  /sessions          list (yours, or everyone's if you are admin)
+    GET  /settings/ai       which AI writes the notes (admin can change it)
+    GET  /recorder          the built-in recorder, desktop app only
     GET  /                  the dashboard
 
 Authentication is ALWAYS required, with no "trusted network" switch. Either:
@@ -27,6 +29,8 @@ from pydantic import BaseModel, Field
 
 import config
 import pipeline
+import recorder_bridge
+import settings_store
 import storage
 import users
 from prompts import TEMPLATES
@@ -56,7 +60,7 @@ throttle = LoginThrottle(config.LOGIN_MAX_FAILURES, config.LOGIN_WINDOW_SEC)
 # password take the same time and cannot be told apart.
 _DUMMY_HASH = hash_password("not-a-real-password")
 
-app = FastAPI(title="Meeting Notes API", version=config.__version__,
+app = FastAPI(title="Notewell API", version=config.__version__,
               docs_url=None, redoc_url=None, openapi_url=None)   # no public schema browser
 
 if config.CORS_ORIGINS:
@@ -221,10 +225,10 @@ async def _fail(session_id: str, why: str) -> None:
         storage.save_session(session_id, existing)
 
 
-async def _process(session_id, transcript, duration_sec, ts, meeting_type, user_email):
+async def _process(session_id, transcript, duration_sec, ts, meeting_type, user_email, context=""):
     try:
         log.info("[%s] processing, %d chars, type=%s", session_id, len(transcript), meeting_type)
-        result = await pipeline.process_transcript(transcript, duration_sec, ts, meeting_type)
+        result = await pipeline.process_transcript(transcript, duration_sec, ts, meeting_type, context)
         existing = storage.load_session(session_id) or {}
         data = {
             "session_id": session_id, "timestamp": ts, "duration_sec": duration_sec,
@@ -232,9 +236,15 @@ async def _process(session_id, transcript, duration_sec, ts, meeting_type, user_
             "summary": result["summary"], "actions": result["actions"], "timing": result["timing"],
             "status": "complete", "user_email": user_email, "tags": existing.get("tags", []),
         }
+        if context:
+            data["context"] = context
         storage.save_session(session_id, data)
         log.info("[%s] done in %ss", session_id, result["timing"]["total_sec"])
         await asyncio.to_thread(_fire_webhook, session_id, data)
+    except pipeline.NotConfigured as e:
+        # Expected in the desktop app before Settings is saved: no traceback.
+        log.warning("[%s] not processed: no AI set up yet", session_id)
+        await _fail(session_id, str(e))
     except Exception as e:
         log.exception("[%s] failed", session_id)
         await _fail(session_id, str(e))
@@ -328,6 +338,11 @@ async def _transcribe_and_process(session_id, audio_path, ts, meeting_type, user
         if len(transcript.strip()) < 20:
             await _fail(session_id, "No speech detected in audio")
             return
+        # Kept now, so a failed AI step leaves a transcript to press Generate on.
+        existing = storage.load_session(session_id) or {}
+        existing.update(transcript=transcript, duration_sec=duration_sec, status="processing",
+                        summary="_Processing..._", actions="_Processing..._")
+        storage.save_session(session_id, existing)
         await _process(session_id, transcript, duration_sec, ts, meeting_type, user_email)
     except Exception as e:
         log.exception("[%s] transcribe+process failed", session_id)
@@ -394,18 +409,50 @@ def get_pdf(session_id: str = SessionId, user: dict = Depends(current_user)):
                     headers={"Content-Disposition": f'attachment; filename="meeting-{safe}-{session_id[:8]}.pdf"'})
 
 
+class ReprocessBody(BaseModel):
+    context: Optional[str] = Field(None, max_length=4000)
+
+
 @app.post("/results/{session_id}/reprocess", status_code=202)
 async def reprocess_session(background: BackgroundTasks, session_id: str = SessionId,
                             meeting_type: str = Query(..., max_length=32),
+                            body: Optional[ReprocessBody] = None,
                             user: dict = Depends(current_user)):
-    """Re-run summary + actions from the stored transcript (e.g. after a provider outage)."""
+    """Re-run summary + actions from the stored transcript (e.g. after a provider
+    outage, or with context the person added). No body keeps the saved context."""
     data = _load_owned(session_id, user)
-    data.update(status="processing", meeting_type=meeting_type,
+    if not (data.get("transcript") or "").strip():
+        raise HTTPException(409, "this meeting has no transcript to work from")
+    if body is not None and body.context is not None:
+        data["context"] = body.context.strip()
+    context = data.get("context", "")
+    data.update(status="processing", meeting_type=meeting_type, error="",
                 summary="_Re-processing..._", actions="_Re-processing..._")
     storage.save_session(session_id, data)
     background.add_task(_process, session_id, data["transcript"], data["duration_sec"],
-                        data["timestamp"], meeting_type, data.get("user_email", user["email"]))
+                        data["timestamp"], meeting_type, data.get("user_email", user["email"]), context)
     return {"session_id": session_id, "status": "reprocessing"}
+
+
+class NotesBody(BaseModel):
+    summary: Optional[str] = Field(None, max_length=200_000)
+    actions: Optional[str] = Field(None, max_length=200_000)
+
+
+@app.put("/results/{session_id}/notes")
+def update_notes(body: NotesBody, session_id: str = SessionId, user: dict = Depends(current_user)):
+    """Save the person's own edits to the summary and action plan."""
+    data = _load_owned(session_id, user)
+    if data.get("status") in ("processing", "transcribing"):
+        raise HTTPException(409, "the AI is still writing this meeting; edit it when it finishes")
+    if body.summary is not None:
+        data["summary"] = body.summary
+    if body.actions is not None:
+        data["actions"] = body.actions
+    data["edited_at"] = datetime.now(timezone.utc).isoformat()
+    storage.save_session(session_id, data)
+    return {"session_id": session_id, "summary": data.get("summary", ""),
+            "actions": data.get("actions", ""), "edited_at": data["edited_at"]}
 
 
 @app.put("/results/{session_id}/tags")
@@ -568,6 +615,123 @@ def delete_user(email: str, admin: dict = Depends(admin_only)):
     return {"status": "deleted", "email": email}
 
 
+# ----------------------------------------------------------- AI settings ---
+class AISettings(BaseModel):
+    provider: str = Field("custom", max_length=32)
+    base_url: str = Field(..., min_length=8, max_length=500)
+    model: str = Field(..., min_length=1, max_length=200)
+    api_key: str = Field("", max_length=500)    # "" = keep the saved key
+
+
+def _check_url(url: str) -> str:
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(422, "the address must start with http:// or https://")
+    return url
+
+
+def _key_for(req: AISettings) -> str:
+    """A blank key means "keep the saved one" - but only for the same address,
+    so switching provider never sends one company's key to another."""
+    if req.api_key.strip():
+        return req.api_key.strip()
+    saved = settings_store.ai()
+    return saved.get("api_key", "") if saved.get("base_url") == req.base_url.strip() else ""
+
+
+@app.get("/settings/ai")
+def get_ai_settings(admin: dict = Depends(admin_only)):
+    saved = settings_store.ai()
+    env = settings_store.env_controls_ai()
+    summary = pipeline.stages()["summary"]
+    return {
+        "source": "env" if env else ("app" if saved.get("base_url") else "none"),
+        "editable": not env,
+        "ready": pipeline.ready(),
+        "provider": saved.get("provider", "") if not env else "env",
+        "base_url": summary.base_url, "model": summary.model,
+        "key_hint": settings_store.key_hint(saved.get("api_key", "")) if not env else "",
+        "presets": settings_store.PRESETS,
+    }
+
+
+@app.put("/settings/ai")
+def put_ai_settings(req: AISettings, admin: dict = Depends(admin_only)):
+    if settings_store.env_controls_ai():
+        raise HTTPException(409, "This server's AI is set in its configuration file (LLM_* settings), "
+                                 "so it cannot be changed here.")
+    base = _check_url(req.base_url)
+    key = _key_for(req)
+    if not key and not config.is_local_url(base):
+        raise HTTPException(422, "this provider needs an API key")
+    settings_store.save_ai(req.provider, base, req.model.strip(), key)
+    try:
+        pipeline.init()
+    except config.ConfigError:
+        raise HTTPException(422, "saved, but the AI could not be set up from these values")
+    log.info("AI settings changed by %s -> %s @ %s", admin["email"], req.model, base)
+    return get_ai_settings(admin)
+
+
+@app.post("/settings/ai/test")
+async def test_ai_settings(req: AISettings, admin: dict = Depends(admin_only)):
+    """Try the values on screen (saved or not) with one tiny request."""
+    base = _check_url(req.base_url)
+    t0 = datetime.now(timezone.utc)
+    try:
+        reply = await pipeline.test_connection(base, req.model.strip(), _key_for(req))
+    except Exception as e:
+        return {"ok": False, "error": pipeline._short(e)}
+    secs = (datetime.now(timezone.utc) - t0).total_seconds()
+    return {"ok": True, "reply": reply, "seconds": round(secs, 1)}
+
+
+# -------------------------------------------- recorder (desktop app only) ---
+def _recorder() -> None:
+    if not recorder_bridge.available():
+        raise HTTPException(501, "No recorder is built in here. Recording is done by the "
+                                 "recorder app on each computer.")
+
+
+class RecorderSettings(BaseModel):
+    audio_source: Optional[str] = Field(None, max_length=200)
+    language: Optional[str] = Field(None, max_length=10)
+    auto_detect: Optional[bool] = None
+    live_transcript: Optional[bool] = None
+    whisper_model: Optional[str] = Field(None, max_length=60)
+
+
+@app.get("/recorder")
+def recorder_status(admin: dict = Depends(admin_only)):
+    return recorder_bridge.status()
+
+
+@app.post("/recorder/start")
+async def recorder_start(admin: dict = Depends(admin_only)):
+    _recorder()
+    await asyncio.to_thread(recorder_bridge.start)
+    return recorder_bridge.status()
+
+
+@app.post("/recorder/stop")
+async def recorder_stop(admin: dict = Depends(admin_only)):
+    _recorder()
+    await asyncio.to_thread(recorder_bridge.stop)
+    return recorder_bridge.status()
+
+
+@app.get("/recorder/devices")
+async def recorder_devices(admin: dict = Depends(admin_only)):
+    _recorder()
+    return {"devices": await asyncio.to_thread(recorder_bridge.devices)}
+
+
+@app.put("/recorder/settings")
+def recorder_settings(req: RecorderSettings, admin: dict = Depends(admin_only)):
+    _recorder()
+    return {"settings": recorder_bridge.update(req.model_dump(exclude_none=True))}
+
+
 # ------------------------------------------------------------- dashboard ---
 app.mount("/static", StaticFiles(directory=str(DASHBOARD_DIR)), name="static")
 
@@ -577,7 +741,7 @@ def root():
     index = DASHBOARD_DIR / "index.html"
     if index.exists():
         return HTMLResponse(index.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>Meeting Notes API</h1><p>Dashboard files are missing.</p>")
+    return HTMLResponse("<h1>Notewell</h1><p>Dashboard files are missing.</p>")
 
 
 if __name__ == "__main__":

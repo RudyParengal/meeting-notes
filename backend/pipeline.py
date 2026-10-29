@@ -19,10 +19,12 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from typing import Optional
 
 from openai import AsyncOpenAI
 
 import config
+import settings_store
 from prompts import action_prompt, classify_prompt, summary_prompt
 
 log = logging.getLogger("pipeline")
@@ -48,46 +50,64 @@ VALID_TYPES = {"client", "team", "project", "sales", "investment", "technical",
                "interview", "standup", "generic"}
 
 
+NOT_SET_UP = ("No AI is set up yet. Open Settings, choose an AI provider and press Save, "
+              "then press Generate on this meeting. The transcript is kept.")
+
+
+class NotConfigured(Exception):
+    """No AI chosen yet (desktop app before its first Settings save)."""
+
+
 @dataclass
 class Stage:
     name: str
     model: str
     base_url: str
-    client: AsyncOpenAI
+    client: Optional[AsyncOpenAI]       # None = not set up yet
 
     def describe(self) -> str:
-        return f"{self.name}: {self.model} @ {self.base_url}"
+        return f"{self.name}: {self.model} @ {self.base_url}" if self.client else f"{self.name}: not set up"
+
+
+def make_client(base_url: str, key: str) -> AsyncOpenAI:
+    # max_retries=0: retrying is done in _chat(), with delays long enough to matter.
+    return AsyncOpenAI(api_key=key or "not-needed", base_url=base_url, timeout=TIMEOUT_SEC, max_retries=0)
 
 
 def _build_stage(name: str) -> Stage:
-    """Resolve one stage's endpoint: STAGE_* beats LLM_* beats the built-in default."""
+    """Resolve one stage's endpoint: STAGE_* beats LLM_* beats what was saved on
+    the Settings screen beats the built-in default."""
     up = name.upper()
-    base = config.env(f"{up}_BASE_URL") or config.env("LLM_BASE_URL") or DEFAULT_BASE_URL
-    model = config.env(f"{up}_MODEL") or config.env("LLM_MODEL") or DEFAULT_MODEL
-    key = config.env(f"{up}_API_KEY") or config.env("LLM_API_KEY")
+    saved = settings_store.ai()
+    base = (config.env(f"{up}_BASE_URL") or config.env("LLM_BASE_URL")
+            or saved.get("base_url") or DEFAULT_BASE_URL)
+    model = config.env(f"{up}_MODEL") or config.env("LLM_MODEL") or saved.get("model") or DEFAULT_MODEL
+    key = config.env(f"{up}_API_KEY") or config.env("LLM_API_KEY") or saved.get("api_key", "")
 
     if config.is_placeholder(key):
         if config.is_local_url(base):
             key = "not-needed"          # Ollama / LM Studio ignore the key
+        elif config.ALLOW_UNCONFIGURED_AI:
+            return Stage(name=name, model="", base_url="", client=None)
         else:
             raise config.ConfigError(
                 f"No API key for the '{name}' stage ({base}).\n"
                 f"  Set LLM_API_KEY in backend/.env (or {up}_API_KEY for this stage only).\n"
                 f"  Running a local model instead? Set LLM_BASE_URL=http://localhost:11434/v1 "
                 f"and LLM_MODEL to the model you pulled.")
-    # max_retries=0: retrying is done in _chat(), with delays long enough to matter.
-    client = AsyncOpenAI(api_key=key, base_url=base, timeout=TIMEOUT_SEC, max_retries=0)
-    return Stage(name=name, model=model, base_url=base, client=client)
+    return Stage(name=name, model=model, base_url=base, client=make_client(base, key))
 
 
 _stages: dict[str, Stage] = {}
 
 
 def init() -> dict[str, Stage]:
-    """Build every stage. Called once at start-up so a bad setting stops the
-    server immediately instead of failing on the first real meeting."""
-    for s in ("classify", "summary", "action"):
-        _stages[s] = _build_stage(s)
+    """Build every stage. Called at start-up so a bad setting stops the server
+    immediately instead of failing on the first real meeting, and again after
+    the Settings screen saves a new choice."""
+    built = {s: _build_stage(s) for s in ("classify", "summary", "action")}
+    _stages.clear()
+    _stages.update(built)
     for st in _stages.values():
         log.info("LLM stage -> %s", st.describe())
     return _stages
@@ -97,6 +117,25 @@ def stages() -> dict[str, Stage]:
     if not _stages:
         init()
     return _stages
+
+
+def ready() -> bool:
+    return all(s.client is not None for s in stages().values())
+
+
+async def test_connection(base_url: str, model: str, key: str) -> str:
+    """One tiny request, no retries: does this provider, model and key work?
+    Returns the model's reply; raises with the provider's own error otherwise."""
+    stage = Stage(name="test", model=model, base_url=base_url, client=make_client(base_url, key))
+    resp = await stage.client.chat.completions.create(
+        model=model, messages=[{"role": "user", "content": "Reply with the single word: ready"}],
+        temperature=0.0,
+        # Not 5: thinking models spend output on hidden reasoning first.
+        max_tokens=CLASSIFY_MAX_TOKENS)
+    text = (resp.choices[0].message.content or "").strip()
+    if not text:
+        raise EmptyAnswer(f"the model answered with no text (finish_reason={resp.choices[0].finish_reason})")
+    return text[:200]
 
 
 # -----------------------------------------------------------------
@@ -145,6 +184,8 @@ class EmptyAnswer(Exception):
 
 
 async def _chat(stage: Stage, prompt: str, *, temperature: float = 0.3, max_tokens: int = None) -> str:
+    if stage.client is None:
+        raise NotConfigured(NOT_SET_UP)
     max_tokens = max_tokens or MAX_TOKENS
     attempt = 0
     while True:
@@ -194,14 +235,15 @@ async def classify_meeting(transcript: str) -> str:
         return "generic"
 
 
-async def generate_summary(transcript: str, meeting_type: str, duration_min: int, date_str: str) -> str:
+async def generate_summary(transcript: str, meeting_type: str, duration_min: int, date_str: str,
+                           context: str = "") -> str:
     return await _chat(stages()["summary"],
-                       summary_prompt(transcript, meeting_type, duration_min, date_str))
+                       summary_prompt(transcript, meeting_type, duration_min, date_str, context))
 
 
-async def generate_actions(transcript: str, meeting_type: str) -> str:
+async def generate_actions(transcript: str, meeting_type: str, context: str = "") -> str:
     try:
-        return await _chat(stages()["action"], action_prompt(transcript, meeting_type))
+        return await _chat(stages()["action"], action_prompt(transcript, meeting_type, context))
     except Exception as e:
         # A provider failure must degrade the note, never hang the session.
         # The reason is written into the note so it is visible, not just logged.
@@ -215,8 +257,13 @@ def _short(e: Exception) -> str:
 
 
 async def process_transcript(transcript: str, duration_sec: int, date_str: str,
-                             meeting_type: str = "auto") -> dict:
-    """Clean fillers, classify if asked, then run summary and actions in parallel."""
+                             meeting_type: str = "auto", context: str = "") -> dict:
+    """Clean fillers, classify if asked, then run summary and actions in parallel.
+
+    `context` is what the person typed in "Add context for the AI" - names,
+    spellings, what the meeting was for. It goes into both prompts."""
+    if not ready():
+        raise NotConfigured(NOT_SET_UP)
     t0 = time.time()
     duration_min = max(1, duration_sec // 60)
 
@@ -229,8 +276,8 @@ async def process_transcript(transcript: str, duration_sec: int, date_str: str,
 
     t1 = time.time()
     summary, actions = await asyncio.gather(
-        generate_summary(cleaned, meeting_type, duration_min, date_str),
-        generate_actions(cleaned, meeting_type),
+        generate_summary(cleaned, meeting_type, duration_min, date_str, context),
+        generate_actions(cleaned, meeting_type, context),
         return_exceptions=True,
     )
     t2 = time.time()

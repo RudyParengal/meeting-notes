@@ -3,6 +3,7 @@
 
 # POST /upload-audio : the server transcribes an audio file itself.
 faster-whisper>=1.0,<2
+av<19                       # PyAV 19 breaks faster-whisper 1.2.1's file reading (tests/recorder/test_audio_file.py)
 
 # GET /results/{id}/pdf : PDF export. WeasyPrint also needs system libraries
 # (Pango/Cairo) - see https://doc.courtbouillon.org/weasyprint/

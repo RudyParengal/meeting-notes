@@ -1,6 +1,8 @@
 # Configuration
 
-There are two places to configure:
+**Using the Windows app (Notewell-Setup.exe)?** Everything is on its **Settings** screen — AI provider, key, model, microphone, speech model, language. It saves to `%USERPROFILE%\Notewell`. You do not need this page.
+
+For a shared team server, there are two places to configure:
 
 | Where | What it controls | Edit with |
 |---|---|---|
@@ -25,9 +27,12 @@ The server talks to any service that offers the **OpenAI chat format**. You set 
 
 | Provider | `LLM_BASE_URL` | Example `LLM_MODEL` | Notes |
 |---|---|---|---|
+| **Mistral** | `https://api.mistral.ai/v1` | `ministral-14b-latest` | **Free plan.** Key: [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys). It may train on your data unless you switch that off in Admin → Privacy |
 | **Google Gemini** | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-2.5-flash` | Cheap and fast. Key: [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | **OpenAI** | `https://api.openai.com/v1` | `gpt-4o-mini` | The default if you set nothing |
-| **Groq** | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` | Very fast |
+| **Anthropic (Claude)** | `https://api.anthropic.com/v1/` | `claude-haiku-5-5` | Paid API key from [console.anthropic.com](https://console.anthropic.com/settings/keys) |
+| **xAI (Grok)** | `https://api.x.ai/v1` | `grok-4.7` | Paid API key from [console.x.ai](https://console.x.ai) |
+| **Groq** | `https://api.groq.com/openai/v1` | `openai/gpt-oss-120b` | Very fast. Free limit (about 8,000 tokens, roughly 6,000 words, a minute) suits short meetings |
 | **DeepSeek** | `https://api.deepseek.com/v1` | `deepseek-chat` | |
 | **Ollama** (on your computer) | `http://localhost:11434/v1` | `llama3.1` | **Nothing leaves your machine.** No key needed. Install from [ollama.com](https://ollama.com), then `ollama pull llama3.1` |
 | **LM Studio / vLLM** | their local address | the model you loaded | No key needed for local addresses |
