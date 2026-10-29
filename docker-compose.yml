@@ -1,0 +1,34 @@
+# Meeting Notes server.
+#
+#   1. cp backend/.env.example backend/.env       and fill in the two required lines
+#   2. docker compose up -d --build
+#   3. python scripts/doctor.py --e2e
+#
+# The port is published on THIS computer only (127.0.0.1). To reach it from
+# elsewhere put an HTTPS reverse proxy in front - deploy/Caddyfile.example or
+# deploy/nginx.conf.example - rather than changing this line.
+services:
+  meeting-notes:
+    build: .
+    image: meeting-notes:latest
+    container_name: meeting-notes
+    restart: unless-stopped
+    env_file: backend/.env          # secrets stay in this file, never baked into the image
+    environment:
+      HOST: 0.0.0.0                 # inside the container
+      DATA_DIR: /data
+    ports:
+      - "127.0.0.1:8766:8766"
+    volumes:
+      - notes-data:/data
+    # Least privilege: read-only filesystem, no extra Linux capabilities, no
+    # privilege escalation. /data is the only place it can write.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  notes-data:

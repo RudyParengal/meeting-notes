@@ -1,192 +1,117 @@
-# Meeting Notes — Self-Hosted AI Notetaker
+# Meeting Notes
 
-A fully self-hosted meeting notetaker that replaces paid tools like Otter.ai, Fireflies, Granola, and Read.ai. **Audio stays 100% on your laptop**; only text transcripts are sent to cloud LLMs for analysis. Runs on Windows + any Linux VPS.
+**A self-hosted AI note-taker.** It records your calls on Windows, turns them into text on your own computer, and writes a summary and a list of action items. You own the server, the data and the AI account. No subscription, no third-party app, no sign-up.
 
-**Cost:** ~$0.10/month for 100 meetings (vs $10-20/month per seat for commercial tools).
-**Works with:** Zoom, Microsoft Teams, Webex, Cisco, Slack Huddles, Discord — any meeting platform that plays audio through Windows.
+- **Your audio never leaves your laptop.** Only the written transcript goes to the AI that writes the summary — and if you run a local model (Ollama), not even that.
+- **Works with any AI provider** that speaks the OpenAI format: OpenAI, Google Gemini, Groq, DeepSeek, Ollama (local), LM Studio and more. Change it with one line.
+- **Survives crashes.** Audio is saved to disk while you talk. If the laptop dies mid-call, the recording is recovered on the next start.
+- **Knows who said what.** Your own voice is labelled "Me"; everyone else on the call can be split into Speaker 1, 2, 3 — all on your computer.
+- **Optional live transcript** window while the call is happening.
+- **Safe by default.** Login is always required, the server only listens on your own computer until you decide otherwise, and no secret is ever stored in plain text.
 
-> ⚠️ **Google Meet is NOT covered** — Google Workspace already has built-in Gemini notes. This tool is for the other platforms.
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────┐        ┌──────────────────────────────┐
-│   Windows laptop            │        │   Your VPS (Linux)           │
-│                             │        │                              │
-│  Meeting Recorder (tray)    │        │  FastAPI backend (port 8766) │
-│    ├── WASAPI loopback      │ ─────▶ │    ├── Auth (email + pw)    │
-│    ├── faster-whisper       │  text  │    ├── Gemini 2.5 Flash     │
-│    │   (local, GPU or CPU)  │ upload │    │   (summary, parallel)  │
-│    ├── Dual-stream diariz.  │        │    ├── DeepSeek V3          │
-│    ├── Custom vocab         │        │    │   (action items)       │
-│    └── Auto-meeting detect  │        │    └── /var/meeting-notes/  │
-│                             │ ◀───── │           (JSON + Markdown) │
-│  Tray icon menu:            │ result │                              │
-│    ⏺ Start / ⏹ Stop         │        │  Dashboard (vanilla JS)     │
-│    🔊 Test Audio            │        │    ├── Login, multi-user    │
-│    Audio Source ▶           │        │    ├── List / search / tag  │
-│                             │        │    ├── Download MD/TXT/PDF  │
-│                             │        │    ├── Delete / Restore     │
-│                             │        │    └── Admin panel          │
-└─────────────────────────────┘        └──────────────────────────────┘
-```
-
-### Why split like this?
-
-- **Audio never leaves your laptop.** Voice = biometric. Text = much less sensitive.
-- **Whisper runs locally**, leveraging your CPU or GPU. No monthly transcription fees.
-- **LLM summarization runs on cheap cloud APIs** — Gemini Flash costs fractions of a penny per meeting.
-- **VPS only stores text** — small disk footprint, fast search, easy backup.
+> **Recording laws.** In many places you must tell people the call is being recorded. Auto-recording of meetings is **off** by default. Turning it on is your responsibility.
 
 ---
 
-## Features
+## Quick start (about 10 minutes)
 
-### Windows Recorder (tray app)
+You need **Python 3.10 or newer** ([python.org](https://www.python.org/downloads/) — tick "Add python.exe to PATH" on Windows). The server runs on Windows, Mac or Linux. The recorder is Windows-only.
 
-- **Dual-stream audio capture** — simultaneous mic ("Me") + system loopback ("Others") for free speaker diarization
-- **Local Whisper transcription** (distil-large-v3 by default, 1.5 GB, multilingual)
-- **Auto-meeting detection** — auto-starts when Zoom/Teams/Webex/Slack/Discord launches (with 15s debounce)
-- **Audio source picker** — choose which output device to capture (helpful with Bluetooth, HDMI, etc.)
-- **Test Audio** — 5-second capture with RMS level report so you verify routing *before* a meeting
-- **Custom vocabulary** — give Whisper a list of product/people names it should transcribe correctly
-- **Silence detection** — alerts you if no audio is captured for 10+ seconds
-- **Sound effects** — subtle beep on start, boop on stop (configurable)
-- **Single-instance lock** — prevents accidental duplicate launches
-- **Backup WAV + transcript** saved locally as a safety net
-- **Per-user API key** — multi-user deployments
-- **Windows-native** — tray icon, toast notifications, Startup-folder auto-launch
-
-### Dashboard (browser)
-
-- **Email + password login** (SHA-256 hashed, session tokens)
-- **Multi-user** — each user sees only their own meetings; admins see all
-- **Admin panel** — add/remove users, view API keys
-- **Meeting list** with search and tag filtering
-- **8 meeting templates**: `client`, `sales`, `technical`, `investment`, `standup`, `team`, `interview`, `generic`, plus `auto` (AI classification)
-- **Re-analyze** any meeting with a different template
-- **Session tagging** — color-coded tags (important, follow-up, client, internal, archived, + custom)
-- **Download** as Markdown, plain text, or PDF
-- **Delete + Restore** — soft-delete to trash, restore or purge
-- **Auto-refresh** every 10 seconds for real-time status updates
-
-### Backend (FastAPI)
-
-- **Parallel AI pipeline** — Gemini summary + DeepSeek actions run concurrently (~30s total)
-- **Filler-word cleanup** before LLM prompts
-- **Audio file import** — upload a `.wav`/`.mp3`/`.m4a` for retrospective processing
-- **Webhook on completion** — POST to any URL (Slack, email-relay, etc.)
-- **Auto-export to folder** — for syncing to Obsidian vault, Dropbox, etc.
-- **Interactive API docs** at `/docs` (Swagger UI)
-- **16 documented endpoints** — build your own integrations
-
-### Meeting output (per session)
-
-Each meeting produces:
-
-- **Meeting title** (AI-inferred)
-- **Metadata** (participants detected, duration, type)
-- **Executive summary** (5 bullets)
-- **Key decisions made**
-- **Open questions**
-- **Action plan with Eisenhower Matrix** (Do Now / Schedule / Delegate / Eliminate)
-- **Contextual details** per task: owner, deadline, dependencies, rationale
-- **Recommended workflow** — step-by-step execution
-- **Risks if delayed** + **suggested follow-up messages**
-
----
-
-## Setup
-
-Two parts:
-1. **VPS backend** (one-time, by an admin)
-2. **Windows recorder** (per user)
-
-See [`docs/SETUP.md`](docs/SETUP.md) for the full walkthrough. Quick version:
-
-### VPS backend
+### 1. Get the code
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/meeting-notes.git
-cd meeting-notes/backend
-python3 -m venv venv
-venv/bin/pip install -r requirements.txt
-cp .env.example .env              # fill in your Gemini + DeepSeek keys
-cp users.json.example users.json  # create your admin user
-sudo cp ../systemd/meeting-notes.service /etc/systemd/system/
-sudo systemctl enable --now meeting-notes
-# optional: nginx reverse-proxy at notes.yourdomain.com
+git clone https://github.com/RudyParengal/meeting-notes.git
+cd meeting-notes
 ```
 
-### Windows recorder
+### 2. Set up the server
+
+```bash
+python -m venv venv
+venv/Scripts/pip install -r backend/requirements.txt      # Windows
+# venv/bin/pip install -r backend/requirements.txt        # Mac / Linux
+
+python scripts/setup-env.py        # asks which AI provider; creates backend/.env
+```
+
+No AI key yet? Choose **mock** — a built-in fake AI, so you can try everything first.
+
+### 3. Start it and check it
+
+```bash
+venv/Scripts/python backend/main.py         # leave this window open
+```
+
+In a second window:
+
+```bash
+venv/Scripts/python scripts/doctor.py --e2e
+```
+
+You want every line to say `PASS`. Then open **http://127.0.0.1:8766** and log in with:
+
+- **Email:** `admin@localhost`
+- **Password:** the `MEETING_NOTES_API_KEY` value inside `backend/.env`
+
+### 4. Install the recorder (Windows)
 
 ```powershell
-cd windows-recorder
-.\install.ps1     # prompts for your API key
-# Whisper model (~1.5 GB) auto-downloads on first launch
+powershell -ExecutionPolicy Bypass -File windows-recorder\install.ps1 -SpeakerSeparation
 ```
 
-Tray icon appears — right-click → Start Meeting.
+Look for the **blue circle in the system tray**. Right-click it → **Start Meeting**. Choose **Stop Meeting** to finish; the note appears on the dashboard in a minute or two.
+
+**Full instructions, including running the server on a separate machine:** [docs/INSTALL.md](docs/INSTALL.md)
 
 ---
 
-## Team guide
+## Let an AI assistant do it for you
 
-[`docs/TEAM-GUIDE.md`](docs/TEAM-GUIDE.md) is an 850-line team-onboarding guide covering:
-
-- What the system does and how it works
-- Day-to-day usage workflow
-- Templates and when to use each
-- Configuration options
-- Troubleshooting
-- Admin tasks (user management, rollback, backups)
-- API reference
-- Security & privacy guarantees
+Paste the prompt in **[docs/AGENT_SETUP.md](docs/AGENT_SETUP.md)** into Claude, ChatGPT, Cursor or any agent that can run commands on your computer. It installs and checks everything, and tells you the one or two things only you can do (such as pasting your AI key).
 
 ---
 
-## API
+## Documentation
 
-Interactive docs: `https://your-vps.example.com/docs`
+| Read this | When |
+|---|---|
+| [docs/INSTALL.md](docs/INSTALL.md) | Installing — laptop only, Docker, or a separate server with HTTPS |
+| [docs/USAGE.md](docs/USAGE.md) | Recording, the dashboard, adding teammates, searching, exports |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Changing AI provider or model, adding API keys, every setting |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Something is not working |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How it fits together and why |
+| [SECURITY.md](SECURITY.md) | What is protected, what is your job, how to report a problem |
+| [docs/AGENT_SETUP.md](docs/AGENT_SETUP.md) | Prompt for an AI agent to install it for you |
+| [CHANGELOG.md](CHANGELOG.md) | What changed between versions |
 
-16 endpoints in total, covering:
-- Auth: `/login`, `/logout`, `/me`
-- Core: `/transcribe`, `/upload-audio`, `/sessions`, `/results/{id}`
-- Export: `/results/{id}/download` (MD), `/results/{id}/pdf`, `/results/{id}/markdown`
-- Tags: `PUT /results/{id}/tags`
-- Re-analyze: `/results/{id}/reprocess`
-- Trash: `DELETE /results/{id}`, `POST /results/{id}/restore`, `DELETE /results/{id}/purge`, `GET /trash`
-- Admin: `GET|POST /admin/users`, `DELETE /admin/users/{email}`
-- Meta: `/templates`, `/health`
+## What it costs
 
-All protected endpoints accept **either** `X-API-Key: mn_...` (for machine clients like the recorder) **or** `Authorization: Bearer <session_token>` (for browser dashboard).
+| Part | Cost |
+|---|---|
+| Software | Free (MIT licence) |
+| Transcription | Free — runs on your own computer |
+| Summaries | A fraction of a cent per meeting on Gemini Flash / GPT-4o-mini; free with a local model |
+| Server | Your own computer, or any small VPS |
 
----
+## Requirements
 
-## Security & privacy
+| | Server | Recorder |
+|---|---|---|
+| System | Windows, Mac or Linux | Windows 10 / 11 |
+| Python | 3.10+ | 3.10+ |
+| Disk | tiny (notes are text) | about 2 GB for the speech model (downloaded once) |
+| Memory | modest | a few GB free while transcribing (less with a smaller speech model) |
+| Internet | to reach your AI provider (not needed with Ollama) | first-time model download only |
 
-- **Audio is processed locally** on the user's laptop. It never leaves the machine.
-- **Only plain text transcripts** are sent to Google Gemini and DeepSeek.
-- **Dashboard is behind email + password auth.** Session tokens expire on logout.
-- **Per-user API keys** for the recorder — no shared credentials.
-- **Password hashes** are SHA-256; no plaintext passwords are ever stored.
-- **All meeting data** lives on your own VPS in `/var/meeting-notes/`. Fully under your control.
-- **Secrets** (`.env`, `users.json`) are in `.gitignore`. Never commit them.
+## Tests
 
----
+```bash
+venv/Scripts/pip install pytest
+venv/Scripts/python -m pytest tests/server -q       # server: no network or AI key needed
+```
 
-## Contributing
+The recorder has its own tests in `tests/recorder/` (plain scripts, Windows). Every push runs both on GitHub Actions, together with a secret scan of the whole history and a real end-to-end run.
 
-Issues and PRs welcome. This is a personal project actively used by a small team, so breaking changes may not land quickly — open an issue to discuss before a big PR.
+## Licence and credits
 
----
-
-## License
-
-MIT. See [LICENSE](LICENSE).
-
-## Credits
-
-Major open-source libraries: faster-whisper, FastAPI, pystray, soundcard, google-genai, and many more. Full list including feature inspirations from similar projects (ghost-pepper, Meetily, OpenOats) in [CREDITS.md](CREDITS.md).
+MIT — see [LICENSE](LICENSE). Built on open-source work listed in [CREDITS.md](CREDITS.md).

@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Read-only by default; nothing here needs to write to the repository.
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: No secrets or personal data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the whole history, so old commits are checked too
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/check-secrets.py --history
+
+  server:
+    name: Server tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r backend/requirements.txt pytest
+      - run: python -m pytest tests/server -q
+
+  recorder:
+    name: Recorder tests + installer syntax (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install exactly what install.ps1 installs
+        run: pip install -r windows-recorder/requirements.txt -r windows-recorder/requirements-diarize.txt
+      - name: Download and verify the speaker-separation models
+        run: python windows-recorder/fetch_models.py
+      - name: Recorder tests
+        shell: bash
+        run: |
+          set -e
+          for t in test_config_and_supervisor test_upload test_spool test_capture test_live test_diarize; do
+            echo "=== $t"; python tests/recorder/$t.py
+          done
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          foreach ($f in 'windows-recorder/install.ps1','windows-recorder/uninstall.ps1') {
+            $errors = $null; $tokens = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$tokens, [ref]$errors)
+            if ($errors.Count) { $errors | ForEach-Object { Write-Error "$f line $($_.Extent.StartLineNumber): $($_.Message)" }; exit 1 }
+            Write-Host "OK  $f"
+          }
+
+  end-to-end:
+    name: Whole system, end to end (fake AI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r backend/requirements.txt
+      - name: Start a fake AI and the real server
+        run: |
+          KEY="mn_$(python -c 'import secrets; print(secrets.token_hex(24))')"
+          echo "::add-mask::$KEY"
+          echo "MN_API_KEY=$KEY" >> "$GITHUB_ENV"
+          python scripts/mock_llm.py --port 19099 &
+          MEETING_NOTES_API_KEY="$KEY" LLM_BASE_URL=http://127.0.0.1:19099/v1 LLM_MODEL=mock \
+            DATA_DIR="$RUNNER_TEMP/data" PORT=18766 python backend/main.py &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:18766/health >/dev/null && break; sleep 1; done
+      - name: doctor, with a real meeting pushed through the pipeline
+        run: python scripts/doctor.py --server http://127.0.0.1:18766 --server-only --e2e
+
+  docker:
+    name: Container builds and starts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t meeting-notes:ci .
+      - name: Run it the way docker-compose does, and check it answers
+        run: |
+          docker run -d --name mn --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true \
+            -p 127.0.0.1:18766:8766 -e MEETING_NOTES_API_KEY="mn_$(python3 -c 'import secrets; print(secrets.token_hex(24))')" \
+            -e LLM_BASE_URL=http://127.0.0.1:1/v1 -e LLM_MODEL=x -v mn-data:/data meeting-notes:ci
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:18766/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:18766/health
+          docker logs mn | tail -5
+      - name: It must refuse to start without a key (and say why)
+        run: |
+          set +e
+          docker run --rm meeting-notes:ci > out.txt 2>&1
+          code=$?
+          cat out.txt
+          [ "$code" = "78" ] && grep -q MEETING_NOTES_API_KEY out.txt

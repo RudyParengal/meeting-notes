@@ -1,0 +1,51 @@
+# Meeting Notes server as a systemd service (Linux).
+#
+#   sudo useradd --system --home /opt/meeting-notes --shell /usr/sbin/nologin meetingnotes
+#   sudo cp deploy/meeting-notes.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now meeting-notes
+#   python3 scripts/doctor.py --server-only        # confirm it is really working
+#
+# Assumes the code is in /opt/meeting-notes with a virtualenv at
+# /opt/meeting-notes/venv and settings in /opt/meeting-notes/backend/.env
+# (chmod 600, owned by meetingnotes). Notes are kept in /var/lib/meeting-notes.
+# Edit the paths below if yours differ.
+
+[Unit]
+Description=Meeting Notes server
+After=network-online.target
+Wants=network-online.target
+# If it fails five times in five minutes, stop trying and wait for a human.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=meetingnotes
+Group=meetingnotes
+WorkingDirectory=/opt/meeting-notes
+Environment=DATA_DIR=/var/lib/meeting-notes
+StateDirectory=meeting-notes
+ExecStart=/opt/meeting-notes/venv/bin/python /opt/meeting-notes/backend/main.py
+
+Restart=on-failure
+RestartSec=5
+# Exit code 78 means "your configuration is wrong" (a missing key, a bad URL).
+# Restarting cannot fix that, it only buries the explanation in a crash loop.
+RestartPreventExitStatus=78
+
+# Least privilege: the service can read its code and write only its own data.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+ReadWritePaths=/var/lib/meeting-notes
+
+[Install]
+WantedBy=multi-user.target

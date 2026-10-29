@@ -1,0 +1,97 @@
+:root {
+  --bg: #0d1117; --panel: #161b22; --border: #30363d;
+  --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --ok: #3fb950; --warn: #d29922;
+}
+* { box-sizing: border-box }
+body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg); color: var(--text); }
+.app { display: grid; grid-template-columns: 340px 1fr; height: 100vh }
+.sidebar { background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto }
+.topbar { padding: 16px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 1 }
+.topbar h1 { margin: 0 0 8px; font-size: 18px }
+.topbar input { width: 100%; padding: 8px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-size: 14px }
+.session { padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; position: relative }
+.session:hover { background: #1f2937 }
+.session.active { background: #1e3a5f; border-left: 3px solid var(--accent) }
+.session.trashed { opacity: 0.55 }
+.session.trashed .title { text-decoration: line-through; color: var(--muted) }
+.session .title { font-weight: 600; font-size: 14px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 24px }
+.session .del-btn { position: absolute; top: 10px; right: 10px; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; opacity: 0; transition: opacity 0.15s, background 0.15s }
+.session:hover .del-btn { opacity: 1 }
+.session .del-btn:hover { color: #f85149; background: #f8514922 }
+.session .meta { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
+.session .badge { background: var(--border); padding: 1px 6px; border-radius: 10px; font-size: 11px }
+.session .badge.processing { background: var(--warn); color: #000 }
+.session .badge.failed { background: #f85149; color: #fff }
+.content { overflow-y: auto; padding: 32px 48px }
+.content h1, .content h2, .content h3 { border-bottom: 1px solid var(--border); padding-bottom: 4px }
+.content table { border-collapse: collapse; width: 100%; margin: 16px 0 }
+.content th, .content td { padding: 8px 12px; border: 1px solid var(--border); text-align: left; vertical-align: top }
+.content th { background: var(--panel) }
+.content code { background: var(--panel); padding: 2px 6px; border-radius: 4px; font-size: 0.9em }
+.content pre { background: var(--panel); padding: 12px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap }
+.content blockquote { border-left: 3px solid var(--accent); padding-left: 16px; color: var(--muted) }
+.empty { color: var(--muted); text-align: center; padding: 64px 16px }
+.auth-gate { max-width: 400px; margin: 100px auto; background: var(--panel); padding: 24px; border-radius: 8px; border: 1px solid var(--border) }
+.auth-gate input { width: 100%; padding: 10px; margin: 12px 0; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: monospace }
+.auth-gate button { padding: 10px 24px; background: var(--accent); color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600 }
+.spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 6px; vertical-align: middle }
+@keyframes spin { to { transform: rotate(360deg) } }
+details summary { cursor: pointer; color: var(--muted); margin: 16px 0 }
+/* Tag pills */
+.tag-pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; margin: 1px 2px; cursor: pointer; font-weight: 500 }
+.tag-pill.important { background: #f8514933; color: #f85149; border: 1px solid #f8514955 }
+.tag-pill.follow-up { background: #d2992233; color: #d29922; border: 1px solid #d2992255 }
+.tag-pill.client { background: #58a6ff33; color: #58a6ff; border: 1px solid #58a6ff55 }
+.tag-pill.internal { background: #8b949e33; color: #8b949e; border: 1px solid #8b949e55 }
+.tag-pill.archived { background: #30363d; color: #8b949e; border: 1px solid #484f58 }
+.tag-pill.default-tag { background: #3fb95033; color: #3fb950; border: 1px solid #3fb95055 }
+.tag-pill .remove-tag { margin-left: 4px; cursor: pointer; opacity: 0.7 }
+.tag-pill .remove-tag:hover { opacity: 1 }
+/* Tag filter bar */
+.tag-filter-bar { padding: 8px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 4px; flex-wrap: wrap; align-items: center }
+.tag-filter-bar .tag-pill { cursor: pointer }
+.tag-filter-bar .tag-pill.active-filter { outline: 2px solid var(--accent); outline-offset: 1px }
+/* Admin panel */
+.admin-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 100; display: flex; align-items: center; justify-content: center }
+.admin-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 24px; width: 700px; max-height: 80vh; overflow-y: auto }
+.admin-panel h2 { margin-top: 0 }
+.admin-panel table { width: 100%; border-collapse: collapse; margin: 12px 0 }
+.admin-panel th, .admin-panel td { padding: 8px; border: 1px solid var(--border); text-align: left; font-size: 13px }
+.admin-panel th { background: var(--bg) }
+.admin-panel input { padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 13px; width: 100% }
+.admin-panel button { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600 }
+.btn-primary { background: var(--accent); color: #fff }
+.btn-danger { background: #f85149; color: #fff }
+.btn-secondary { background: var(--border); color: var(--text) }
+.btn-small { padding: 3px 10px; font-size: 12px }
+.copy-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 11px }
+.copy-btn:hover { color: var(--text); border-color: var(--accent) }
+/* Reanalyze bar */
+.reanalyze-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap }
+.reanalyze-bar select { padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px }
+/* Tags editor */
+.tags-editor { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; padding: 8px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border) }
+.tags-editor input { flex: 1; min-width: 120px; padding: 4px 8px; background: transparent; border: none; color: var(--text); font-size: 13px; outline: none }
+.tag-suggestions { display: flex; gap: 4px; flex-wrap: wrap }
+.tag-suggestions .tag-pill { opacity: 0.6; cursor: pointer }
+.tag-suggestions .tag-pill:hover { opacity: 1 }
+/* User info in topbar */
+.user-info { font-size: 12px; color: var(--muted); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between }
+.user-info .user-name { font-weight: 600; color: var(--text) }
+/* Trash toggle button */
+.trash-btn { padding: 3px 10px; background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 11px; display: inline-flex; align-items: center; gap: 4px }
+.trash-btn:hover { color: var(--text); border-color: var(--accent) }
+.trash-btn.active { background: #f8514922; color: #f85149; border-color: #f8514966 }
+.trash-btn .trash-count { background: var(--border); color: var(--text); padding: 0 6px; border-radius: 8px; font-size: 10px; font-weight: 600 }
+.trash-btn.active .trash-count { background: #f85149; color: #fff }
+/* Trash banner in content */
+.trash-banner { background: #f8514922; border: 1px solid #f8514955; color: #f85149; padding: 10px 14px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; display: flex; align-items: center; gap: 8px }
+.trash-actions { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap }
+.btn-restore { padding: 6px 14px; background: #238636; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600 }
+.btn-restore:hover { background: #2ea043 }
+.btn-purge { padding: 6px 14px; background: #da3633; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600 }
+.btn-purge:hover { background: #f85149 }
+pre.transcript{white-space:pre-wrap;word-break:break-word;max-height:none;line-height:1.6;font-size:13.5px}

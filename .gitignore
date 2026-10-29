@@ -1,43 +1,37 @@
-# Secrets & config
+# ---- secrets and personal data: never commit these ----
 .env
-backend/.env
-backend/users.json
-*.lock
+.env.*
+!.env.example
+**/users.json
+data/
+config.json
+*.pem
+*.key
 
-# Python
+# ---- recordings and notes ----
+*.wav
+*.pcm
+*.mp3
+*.m4a
+uploads/
+spool/
+MeetingRecorder/
+MeetingArchive/
+
+# ---- machine-local ----
 venv/
+.venv/
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-*.egg-info/
 .pytest_cache/
-
-# Node (dashboard deps if any)
-node_modules/
-
-# Whisper model files (large binaries, download separately)
+*.log
+*.bak
+*.bak-*
+*.alive
+*.lock
 windows-recorder/models/
-*.bin
-
-# Runtime data
-/var/meeting-notes/
-models/
-output/
-outputs/
-
-# Local recordings & transcripts (user-specific)
-last_meeting_*.wav
-last_transcript_*.txt
-recorder.log
-
-# IDE
-.vscode/
 .idea/
+.vscode/
 *.swp
-*.swo
-.DS_Store
 Thumbs.db
-
-# OS
 desktop.ini

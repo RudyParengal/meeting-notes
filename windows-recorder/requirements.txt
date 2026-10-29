@@ -1,7 +1,8 @@
-faster-whisper>=1.0.0
-soundcard>=0.4.3
-numpy>=1.26.0
-pystray>=0.19.5
-pillow>=10.0.0
-requests>=2.31.0
-psutil>=5.9.0
+# Meeting Recorder (Windows). Installed into a private virtualenv by install.ps1.
+faster-whisper>=1.0,<2      # local speech-to-text; the audio never leaves this computer
+soundcard>=0.4.6            # captures the call (WASAPI loopback) and the microphone
+numpy>=1.26,<3
+pystray>=0.19.5             # the tray icon
+pillow>=10.0                # draws the tray icon
+requests>=2.31              # talks to your Meeting Notes server
+psutil>=5.9                 # single-instance lock, supervisor

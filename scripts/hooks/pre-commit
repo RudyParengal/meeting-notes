@@ -1,0 +1,16 @@
+#!/bin/sh
+# Blocks a commit that contains a key, token, personal path, IP address or email.
+#
+#   git config core.hooksPath scripts/hooks        # one-time, per clone
+#
+# To also catch your own private words (company name, hostnames), put them in a
+# file OUTSIDE the repo and point to it:
+#   export MN_SECRET_DENY_FILE="$HOME/.meeting-notes-deny"     # one word per line
+set -e
+cd "$(git rev-parse --show-toplevel)"
+ARGS=""
+if [ -n "$MN_SECRET_DENY_FILE" ] && [ -f "$MN_SECRET_DENY_FILE" ]; then
+  while IFS= read -r word; do [ -n "$word" ] && ARGS="$ARGS --deny $word"; done < "$MN_SECRET_DENY_FILE"
+fi
+# shellcheck disable=SC2086
+python3 scripts/check-secrets.py --staged $ARGS 2>/dev/null || python scripts/check-secrets.py --staged $ARGS

@@ -1,0 +1,4 @@
+# Optional: speaker separation ("Speaker 1 / 2 / 3" instead of "Others").
+# Runs entirely on this computer through ONNX - no PyTorch, no cloud.
+# Models (36 MB) are fetched separately and checksum-verified: python fetch_models.py
+sherpa-onnx>=1.12,<2

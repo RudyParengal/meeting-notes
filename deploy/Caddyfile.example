@@ -1,0 +1,33 @@
+# HTTPS in front of Meeting Notes, the easy way: Caddy gets and renews the
+# certificate for you. Replace the hostname with a domain pointing at this server.
+#
+#   sudo apt install caddy
+#   sudo cp deploy/Caddyfile.example /etc/caddy/Caddyfile   # after editing the hostname
+#   sudo systemctl reload caddy
+#
+# Then in backend/.env set:   TRUST_PROXY=1   and   PUBLIC_URL=https://notes.example.com
+# and keep HOST=127.0.0.1 - only Caddy should reach the app.
+#
+# Open ports 80 and 443 on the firewall. NEVER open 8766.
+
+notes.example.com {
+	encode gzip
+
+	# Recordings are small (text); a transcript is a few hundred KB at most.
+	# Audio uploads (optional feature) need more headroom:
+	request_body {
+		max_size 200MB
+	}
+
+	reverse_proxy 127.0.0.1:8766 {
+		# Long AI calls: do not cut the connection early.
+		transport http {
+			response_header_timeout 300s
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}

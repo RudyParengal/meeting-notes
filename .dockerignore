@@ -1,0 +1,16 @@
+# Keep secrets, data and junk out of the image. backend/.env in particular must
+# never be copied into a layer: images get pushed and shared.
+.git
+.github
+**/.env
+**/.env.*
+!**/.env.example
+**/users.json
+data/
+**/__pycache__
+**/*.pyc
+**/venv
+windows-recorder
+tests
+docs
+scripts
