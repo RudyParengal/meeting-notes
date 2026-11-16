@@ -139,6 +139,7 @@ The installer writes this file. After editing, right-click the tray icon → **Q
 | `audio_source` | `default` | A specific speaker/headset name (or use the tray's **Audio Source**) |
 | `sound_effects` | `true` | Beep on start/stop |
 | `silence_alert_seconds` | `10` | Warn if the call has been silent this long |
+| `auto_stop_silence_minutes` | `15` | Stop a forgotten recording after this many minutes with no sound; `0` = never |
 | `archive_backups` | `true` | After a note is safely stored, move the backup audio to `%USERPROFILE%\MeetingArchive` |
 | `archive_retention_days` | `30` | Archived audio older than this is cleared automatically |
 

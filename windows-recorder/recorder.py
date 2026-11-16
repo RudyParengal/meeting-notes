@@ -61,6 +61,7 @@ DEFAULT_CONFIG = {
     "sound_effects": True,                # play beep on start/stop
     "silence_alert_threshold_rms": 0.001, # RMS below this = silence
     "silence_alert_seconds": 10,          # alert after this many seconds of silence
+    "auto_stop_silence_minutes": 15,      # stop a forgotten recording after this much quiet; 0 = never
     "audio_source": "default",            # "default" = current default speaker, or specific device name
     # Phase 3 - crash resilience. Off by default: the in-memory path stays the
     # default until the spool has recorded a real meeting end to end.
@@ -290,6 +291,13 @@ class AudioCapture:
 # -----------------------------------------------------------------
 # Dual-stream audio capture (mic + system = "Me" vs "Others")
 # -----------------------------------------------------------------
+# Stopping a forgotten recording. Measured on 27 real recordings (2026-11-16):
+# an empty room sits near 0.0002, speech near 0.02-0.05, and a lone loud second
+# is usually a click or a bump - so sound only counts when it lasts two seconds.
+AUTO_STOP_LEVEL = 0.003          # RMS; a second at or above this is "loud"
+AUTO_STOP_CHECK_SECONDS = 10     # how often a live recording is looked at
+
+
 class DualAudioCapture:
     """Captures system audio AND microphone input in separate streams.
     System audio -> "Others" (remote participants).
@@ -315,6 +323,9 @@ class DualAudioCapture:
         self._silence_consecutive = 0
         self._silence_alerted = False
         self._silence_notify = None  # set by MeetingManager
+        # When real sound was last heard on either track - see quiet_seconds().
+        self._last_sound = time.monotonic()
+        self._loud_run = {"sys": 0, "mic": 0}
         # Crash-resilient spool. When enabled, captured audio goes to disk as it
         # arrives, and the in-memory lists hold only what was captured AFTER a
         # spool failure, if one happens. See spool.py.
@@ -344,6 +355,8 @@ class DualAudioCapture:
         self._mic_available = True
         self._silence_consecutive = 0
         self._silence_alerted = False
+        self._last_sound = time.monotonic()
+        self._loud_run = {"sys": 0, "mic": 0}
 
         def _record_system():
             import numpy as np
@@ -369,6 +382,7 @@ class DualAudioCapture:
                         rms = np.sqrt(np.mean(data ** 2))
                         self.level_system = float(rms)
                         self._check_silence(rms)
+                        self._note_level("sys", rms)
             except Exception as e:
                 log.exception(f"System audio capture failed: {e}")
                 # Flag the failure so stop() can report it
@@ -386,6 +400,7 @@ class DualAudioCapture:
                         data = rec.record(numframes=self.sample_rate)
                         self._store("mic", data)
                         self.level_mic = float(np.sqrt(np.mean(data ** 2)))
+                        self._note_level("mic", self.level_mic)
             except Exception as e:
                 log.warning(f"Microphone capture failed (falling back to system-only): {e}")
                 self._mic_available = False
@@ -442,6 +457,19 @@ class DualAudioCapture:
             # Don't reset _silence_alerted so we don't re-spam notifications for tiny noise blips
             if rms > threshold * 2:
                 self._silence_consecutive = 0
+
+    def _note_level(self, track, rms):
+        """Restart the quiet clock once a track has been loud two seconds running."""
+        if rms >= AUTO_STOP_LEVEL:
+            self._loud_run[track] += 1
+            if self._loud_run[track] >= 2:
+                self._last_sound = time.monotonic()
+        else:
+            self._loud_run[track] = 0
+
+    def quiet_seconds(self):
+        """How long it has been since either track last carried real sound."""
+        return time.monotonic() - self._last_sound
 
     def stop(self):
         import numpy as np
@@ -818,6 +846,9 @@ class MeetingManager:
         self.started_at = None
         self.processing = False
         self.model_ready = False
+        # Called after a recording stops itself, so the tray icon can follow.
+        self.on_auto_stop = None
+        self._stopped = threading.Event()
 
     def start(self, by_auto=False):
         if self.in_meeting:
@@ -828,6 +859,7 @@ class MeetingManager:
         self._started_by_auto = by_auto
         try:
             self.capture.start()
+            self._watch_silence()
             self._start_live_view()
             if self.cfg.get("sound_effects", True):
                 play_start_sound()
@@ -836,6 +868,7 @@ class MeetingManager:
         except Exception as e:
             self.in_meeting = False
             self._started_by_auto = False
+            self._stopped.set()
             log.exception("start failed")
             self.notify("Error", f"Could not start recording: {e}")
 
@@ -853,6 +886,7 @@ class MeetingManager:
                 log.debug(f"is_meeting_active check during stop failed: {e}")
         self.in_meeting = False
         self._started_by_auto = False
+        self._stopped.set()
         if self.cfg.get("sound_effects", True):
             play_stop_sound()
         self.processing = True
@@ -863,6 +897,47 @@ class MeetingManager:
             self._finish()
         finally:
             self.processing = False
+
+    def check_auto_stop(self):
+        """Stop a recording nobody stopped. True if this call stopped it.
+
+        A meeting that ended while the app was left recording used to run until
+        the laptop was shut - 23 hours and 10 GB on 2026-11-06.
+        """
+        limit = self.cfg.get("auto_stop_silence_minutes", 15)
+        quiet = getattr(self.capture, "quiet_seconds", None)
+        if not self.in_meeting or quiet is None or not limit or limit <= 0:
+            return False
+        if quiet() < limit * 60:
+            return False
+        log.info("No sound for %.0f min - stopping the recording", quiet() / 60)
+        # manual=True on purpose: the meeting app may still be open, and the
+        # auto-detect poller must not start a fresh recording straight away.
+        self.stop(manual=True)
+        self.notify("Recording stopped",
+                    f"No sound for {limit:g} minutes, so Notewell stopped by itself.")
+        if self.on_auto_stop:
+            try:
+                self.on_auto_stop()
+            except Exception as e:
+                log.debug("on_auto_stop failed: %s", e)
+        return True
+
+    def _watch_silence(self):
+        """Look at the live recording every few seconds until it stops."""
+        if not hasattr(self.capture, "quiet_seconds"):
+            return
+        stopped = self._stopped = threading.Event()
+
+        def watch():
+            while not stopped.wait(AUTO_STOP_CHECK_SECONDS):
+                try:
+                    if self.check_auto_stop():
+                        return
+                except Exception as e:
+                    log.warning("auto-stop check failed: %s", e)
+
+        threading.Thread(target=watch, daemon=True).start()
 
     def _start_live_view(self):
         """Open the live transcript window, if it is wanted and possible.
@@ -912,10 +987,14 @@ class MeetingManager:
                 log.debug("closing live window: %s", e)
             self._live_window = None
 
-    def _retain(self, backup_paths):
-        """Clean up after a confirmed upload. Never fatal."""
+    def _retain(self, backup_paths, session_dir=None):
+        """Clean up after a confirmed upload. Never fatal.
+
+        session_dir is the recording that was just uploaded, handed in by
+        _finish. It is not read from the capture here: by now a new recording
+        may have started, and the capture would point at that one.
+        """
         try:
-            session_dir = getattr(self.capture, "session_dir", None)
             if session_dir is not None and spool.discard(session_dir):
                 log.info("Discarded spool %s", session_dir)
         except Exception as e:
@@ -929,6 +1008,8 @@ class MeetingManager:
     def _finish(self):
         backup_paths = []
         try:
+            # Remember which recording this is before anything slow happens.
+            session_dir = getattr(self.capture, "session_dir", None)
             log.info("_finish: stopping capture")
             # Stop decoding immediately - the accurate pass needs the cores.
             # The window stays up so the last lines can still be read.
@@ -995,7 +1076,7 @@ class MeetingManager:
                 # The transcript is safely on the server, so the raw audio no
                 # longer needs to sit in the roaming profile. Order matters:
                 # nothing is discarded until the upload has returned an id.
-                self._retain(backup_paths)
+                self._retain(backup_paths, session_dir)
             except Exception as e:
                 log.exception("upload failed")
                 self.notify("Upload failed", f"{type(e).__name__}: {str(e)[:100]}. Transcript saved locally.")
@@ -1026,6 +1107,63 @@ _MEETING_WINDOW_KEYWORDS = [
 ]
 
 
+def sound_stretches(session_dir, sr, limit_seconds):
+    """The parts of a spooled recording worth transcribing, as (start, end) seconds.
+
+    Same rule that stops a live recording: quiet lasting limit_seconds or more
+    is an empty room and is left out; shorter pauses stay. Reads a minute at a
+    time, so a recording of any length can be scanned. [] means no sound.
+    """
+    import numpy as np
+    total = -(-max(spool.track_samples(session_dir, t) for t in spool.TRACKS) // sr)
+    if limit_seconds <= 0:
+        return [(0, total)]
+    sound = np.zeros(total, dtype=bool)
+    for track in spool.TRACKS:
+        whole = spool.track_samples(session_dir, track) // sr
+        if whole < 2:
+            continue
+        loud = np.zeros(whole, dtype=bool)
+        for i in range(0, whole, 60):
+            n = min(60, whole - i)
+            chunk = spool.read_track_slice(session_dir, track, i * sr, n * sr)
+            if chunk is None:
+                break
+            rms = np.sqrt(np.mean(chunk.reshape(n, sr).astype(np.float64) ** 2, axis=1))
+            loud[i:i + n] = rms >= AUTO_STOP_LEVEL
+        pair = loud[1:] & loud[:-1]          # two loud seconds in a row
+        sound[1:whole] |= pair
+        sound[:whole - 1] |= pair
+    idx = np.flatnonzero(sound)
+    if len(idx) == 0:
+        return [] if total >= limit_seconds else [(0, total)]
+    gaps = np.flatnonzero(np.diff(idx) - 1 >= limit_seconds)
+    starts = np.concatenate(([idx[0]], idx[gaps + 1]))
+    ends = np.concatenate((idx[gaps], [idx[-1]])) + 1
+    if starts[0] < limit_seconds:
+        starts[0] = 0
+    if total - ends[-1] < limit_seconds:
+        ends[-1] = total
+    pad = min(5, int(limit_seconds) // 2)    # a breath either side of each part
+    return [(max(0, int(s) - pad), min(total, int(e) + pad)) for s, e in zip(starts, ends)]
+
+
+def _spool_stretches(session_dir, track, sr, stretches):
+    """One track of a spooled recording, limited to the given (start, end) seconds."""
+    import numpy as np
+    have = spool.track_samples(session_dir, track)
+    parts = []
+    for start, end in stretches:
+        a, b = start * sr, min(end * sr, have)
+        if b > a:
+            part = spool.read_track_slice(session_dir, track, a, b - a)
+            if part is not None:
+                parts.append(part)
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else np.concatenate(parts)
+
+
 def recover_orphan(session_dir, cfg, notify):
     """Transcribe and upload a meeting whose recorder died mid-call.
 
@@ -1033,14 +1171,25 @@ def recover_orphan(session_dir, cfg, notify):
     ordinary transcription pointed at a directory instead of at memory.
     """
     sr = spool.read_meta(session_dir).get("sample_rate", cfg["sample_rate"])
-    system_audio = spool.read_track(session_dir, "sys")
-    mic_audio = spool.read_track(session_dir, "mic")
-    lens = [len(a) / sr for a in (system_audio, mic_audio) if a is not None]
-    duration = max(lens) if lens else 0
-    if duration < 10:
-        log.warning("orphan %s is only %.1fs - discarding", session_dir, duration)
+    on_disk = max(spool.track_seconds(session_dir, t, sr) for t in spool.TRACKS)
+    if on_disk < 10:
+        log.warning("orphan %s is only %.1fs - discarding", session_dir, on_disk)
         spool.discard(session_dir)
         return None
+
+    # A recording nobody stopped is a meeting followed by hours of empty room.
+    # Only the parts with sound are loaded, so its length no longer matters.
+    keep = sound_stretches(session_dir, sr, cfg.get("auto_stop_silence_minutes", 15) * 60)
+    if not keep:
+        log.warning("orphan %s holds no sound - keeping the spool", session_dir)
+        notify("Nothing to recover", "No sound found in the unfinished recording.")
+        return None
+    system_audio = _spool_stretches(session_dir, "sys", sr, keep)
+    mic_audio = _spool_stretches(session_dir, "mic", sr, keep)
+    lens = [len(a) / sr for a in (system_audio, mic_audio) if a is not None]
+    duration = max(lens) if lens else 0
+    if on_disk - duration >= 60:
+        log.info("Keeping %.1f of %.1f min - the rest is silence", duration / 60, on_disk / 60)
 
     log.info("Recovering %s (%.1f min)", session_dir, duration / 60)
     notify("Recovering meeting", f"Transcribing {int(duration // 60)} min left by a crash.")
@@ -1543,6 +1692,8 @@ def main(hooks=None):
                    f"Right-click the tray icon to recover.")
     except Exception as e:
         log.warning("orphan scan failed: %s", e)
+
+    mgr.on_auto_stop = lambda: setattr(icon, "icon", icon_idle)
 
     _touch(RECORDER_ALIVE)
     threading.Thread(target=heartbeat_loop, daemon=True).start()

@@ -280,6 +280,218 @@ check("a crashed session is found and its length known", t_orphan_is_found_and_m
 check("an orphan under the floor is not offered", t_short_orphan_is_discarded_not_offered)
 
 # ---------------------------------------------------------------
+print("\nCleaning up the right recording (2.2.1)")
+
+
+def _manager(**overrides):
+    """A real MeetingManager that touches no sound device, model or network."""
+    cfg = dict(recorder.DEFAULT_CONFIG, sound_effects=False, auto_detect=False,
+               notify_on_complete=False, live_transcript=False)
+    cfg.update(overrides)
+    notes = []
+    mgr = recorder.MeetingManager(cfg, lambda *a: notes.append(a))
+    mgr.notes = notes
+    return mgr
+
+
+def _spooled(d, sys_audio, mic_audio=None, close=True):
+    w = spool.SpoolWriter(d, SR)
+    w.append_system(sys_audio)
+    if mic_audio is not None:
+        w.append_mic(mic_audio)
+    if close:
+        w.close()
+    else:
+        del w
+    return d
+
+
+class _Stubbed:
+    """Swap the model and the upload for stand-ins, and put them back after."""
+
+    def __init__(self, deliver=None):
+        self.heard = []          # (seconds of call audio, seconds of microphone)
+        self.sent = []           # durations handed to the upload
+        self._deliver = deliver
+
+    def __enter__(self):
+        self._real = (recorder.transcribe_dual, recorder.deliver)
+
+        def transcribe(system_audio, mic_audio, cfg):
+            self.heard.append(tuple(0 if a is None else len(a) / SR
+                                    for a in (system_audio, mic_audio)))
+            return "a real sentence somebody said in the meeting"
+
+        def deliver(transcript, duration, cfg):
+            self.sent.append(duration)
+            if self._deliver:
+                self._deliver()
+            return "session-1", "http://localhost"
+
+        recorder.transcribe_dual, recorder.deliver = transcribe, deliver
+        return self
+
+    def __exit__(self, *exc):
+        recorder.transcribe_dual, recorder.deliver = self._real
+
+
+def t_finish_removes_its_own_recording_not_the_next_one():
+    """The 2.2.0 fault: a new recording started while the last one was being
+    written up, and the upload then cleaned up the NEW folder."""
+    with _TempAppdir() as tmp:
+        old = _spooled(tmp / "spool" / "old", tone(12.0), tone(12.0))
+        new = _spooled(tmp / "spool" / "new", tone(12.0), tone(12.0))
+        mgr = _manager()
+        mgr.capture.session_dir = old
+
+        def next_meeting_starts():
+            mgr.capture.session_dir = new
+
+        with _Stubbed(deliver=next_meeting_starts) as s:
+            mgr._finish()
+        assert s.sent, f"the upload never ran: {mgr.notes}"
+        assert not old.exists(), "the finished recording was left behind"
+        assert new.exists(), "the NEXT recording's audio was deleted"
+
+
+check("finishing cleans up its own recording, not the next one",
+      t_finish_removes_its_own_recording_not_the_next_one)
+
+# ---------------------------------------------------------------
+print("\nStopping by itself after a long silence (2.2.1)")
+
+SPEECH, CLICK, ROOM = 0.05, 0.04, 0.0002     # loudness of one second
+
+
+def t_one_click_does_not_restart_the_quiet_clock():
+    c = recorder.DualAudioCapture(SR)
+    c._last_sound = time.monotonic() - 1000
+    c._note_level("mic", CLICK)
+    c._note_level("mic", ROOM)
+    c._note_level("sys", CLICK)
+    c._note_level("mic", CLICK)
+    assert c.quiet_seconds() >= 1000, "a single loud second restarted the clock"
+
+
+def t_two_loud_seconds_restart_the_quiet_clock():
+    c = recorder.DualAudioCapture(SR)
+    c._last_sound = time.monotonic() - 1000
+    c._note_level("sys", SPEECH)
+    c._note_level("sys", SPEECH)
+    assert c.quiet_seconds() < 5, "real sound did not restart the clock"
+
+
+def _recording(minutes_quiet, **cfg):
+    mgr = _manager(**cfg)
+    mgr._finish = lambda: None
+    mgr.in_meeting = True
+    mgr.capture._last_sound = time.monotonic() - minutes_quiet * 60
+    return mgr
+
+
+def t_long_silence_stops_the_recording():
+    mgr = _recording(16)
+    told = []
+    mgr.on_auto_stop = lambda: told.append(1)
+    assert mgr.check_auto_stop() is True
+    assert mgr.in_meeting is False, "still recording"
+    assert told == [1], "the tray icon was never told"
+    assert any("stopped" in n[0].lower() for n in mgr.notes), mgr.notes
+
+
+def t_short_silence_does_not_stop_the_recording():
+    mgr = _recording(14)
+    assert mgr.check_auto_stop() is False
+    assert mgr.in_meeting is True, "a 14-minute pause ended the recording"
+
+
+def t_auto_stop_can_be_switched_off():
+    mgr = _recording(600, auto_stop_silence_minutes=0)
+    assert mgr.check_auto_stop() is False
+    assert mgr.in_meeting is True
+
+
+def t_forgotten_recording_stops_without_anyone_asking():
+    real = recorder.AUTO_STOP_CHECK_SECONDS
+    recorder.AUTO_STOP_CHECK_SECONDS = 0.05
+    try:
+        mgr = _recording(16)
+        mgr._watch_silence()
+        deadline = time.time() + 3
+        while mgr.in_meeting and time.time() < deadline:
+            time.sleep(0.02)
+        assert mgr.in_meeting is False, "nothing was watching the recording"
+    finally:
+        recorder.AUTO_STOP_CHECK_SECONDS = real
+
+
+check("one click does not restart the quiet clock", t_one_click_does_not_restart_the_quiet_clock)
+check("two loud seconds in a row restart it", t_two_loud_seconds_restart_the_quiet_clock)
+check("16 minutes of silence stops the recording", t_long_silence_stops_the_recording)
+check("14 minutes of silence does not", t_short_silence_does_not_stop_the_recording)
+check("a setting of 0 switches auto-stop off", t_auto_stop_can_be_switched_off)
+check("a forgotten recording stops with nobody asking", t_forgotten_recording_stops_without_anyone_asking)
+
+# ---------------------------------------------------------------
+print("\nRecovering a recording that ran for hours (2.2.1)")
+
+HALF_MINUTE = dict(auto_stop_silence_minutes=0.5)      # a 30-second limit, for speed
+
+
+def _quiet(seconds):
+    return np.zeros(int(SR * seconds), dtype=np.float32)
+
+
+def t_recovery_keeps_the_meeting_and_drops_the_empty_room():
+    with _TempAppdir() as tmp:
+        sys_audio = np.concatenate([tone(20.0), _quiet(40.0), tone(20.0)])
+        d = _spooled(tmp / "spool" / "ran-on", sys_audio, _quiet(80.0), close=False)
+        cfg = dict(recorder.DEFAULT_CONFIG, **HALF_MINUTE)
+        whole_file = spool.read_track
+
+        def refuse(*a):
+            raise AssertionError("recovery loaded a whole track into memory")
+
+        spool.read_track = refuse
+        try:
+            with _Stubbed() as s:
+                sid = recorder.recover_orphan(d, cfg, lambda *a: None)
+        finally:
+            spool.read_track = whole_file
+        assert sid == "session-1", sid
+        heard = s.heard[0][0]
+        assert 40 <= heard <= 52, f"transcribed {heard:.0f}s of an 80s file holding 40s of sound"
+        assert abs(s.sent[0] - heard) < 1, f"reported {s.sent[0]}s for {heard:.0f}s of audio"
+        assert not d.exists(), "spool kept after a confirmed upload"
+
+
+def t_recovery_leaves_an_ordinary_recording_whole():
+    with _TempAppdir() as tmp:
+        sys_audio = np.concatenate([tone(20.0), _quiet(10.0), tone(20.0)])
+        d = _spooled(tmp / "spool" / "normal", sys_audio, _quiet(50.0), close=False)
+        cfg = dict(recorder.DEFAULT_CONFIG, **HALF_MINUTE)
+        with _Stubbed() as s:
+            recorder.recover_orphan(d, cfg, lambda *a: None)
+        assert abs(s.heard[0][0] - 50) < 0.1, f"a 10s pause was cut: {s.heard[0][0]:.1f}s of 50s"
+        assert abs(s.sent[0] - 50) < 0.1, s.sent
+
+
+def t_recovery_never_throws_away_a_silent_recording():
+    with _TempAppdir() as tmp:
+        d = _spooled(tmp / "spool" / "silent", _quiet(60.0), _quiet(60.0), close=False)
+        cfg = dict(recorder.DEFAULT_CONFIG, **HALF_MINUTE)
+        with _Stubbed() as s:
+            sid = recorder.recover_orphan(d, cfg, lambda *a: None)
+        assert sid is None and not s.sent, "a silent recording was uploaded as a meeting"
+        assert d.exists(), "a silent recording was deleted"
+
+
+check("recovery keeps the meeting and drops the empty room",
+      t_recovery_keeps_the_meeting_and_drops_the_empty_room)
+check("recovery leaves an ordinary recording whole", t_recovery_leaves_an_ordinary_recording_whole)
+check("recovery never throws away a silent recording", t_recovery_never_throws_away_a_silent_recording)
+
+# ---------------------------------------------------------------
 print()
 total = _passed + len(_failed)
 if _failed:

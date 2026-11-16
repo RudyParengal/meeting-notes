@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.2.1 — A forgotten recording stops by itself (2026-11-16)
+
+### Fixed
+- **A recording you forget to stop now stops by itself** after 15 minutes with no sound on either the call or the microphone, and tells you so. Before, it ran until you stopped it — one ran for 23 hours and filled 10 GB. A single click or bump does not count as sound; two seconds in a row do. Change the wait with `auto_stop_silence_minutes` in the recorder's `config.json` (`0` = never stop by itself).
+- **Recovering a very long unfinished recording works.** Recovery used to load the whole recording into memory and fail on anything many hours long. It now reads a minute at a time, keeps the parts with sound and leaves out any silence longer than the wait above. A recording with no sound at all is kept on disk, not sent as an empty meeting.
+- **Finished recordings are no longer left behind.** If you started a new recording while the last one was still being written up, the old one's working files (0.2–0.8 GB each) stayed on disk for good. Each recording now clears its own files.
+
+### Good to know
+- Music or a video playing for hours counts as sound, so that recording will not stop by itself.
+- If the computer sleeps for longer than the wait while recording, the recording stops when it wakes.
+
 ## 2.2.0 — Its own window, keys locked away (2026-10-29)
 
 **Notewell no longer needs Microsoft Edge.** It has its own window, with its own icon on the taskbar.
