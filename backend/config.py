@@ -19,7 +19,7 @@ REPO = HERE.parent
 # container or systemd unit can override anything without editing it.
 load_dotenv(HERE / ".env", override=False)
 
-__version__ = "2.4.2"
+__version__ = "2.4.3"
 
 # Values that mean "the person copied .env.example and never filled it in".
 _PLACEHOLDERS = {

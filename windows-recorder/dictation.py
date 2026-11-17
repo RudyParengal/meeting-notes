@@ -41,7 +41,11 @@ log = logging.getLogger("dictation")
 SR = 16000
 MIN_SECONDS = 0.3          # shorter than this is a key tapped by accident
 MAX_SECONDS = 300          # a key stuck down must not record forever
-QUIET_RMS = 0.004          # loudest moments below this = no speech; the model would invent some
+QUIET_RMS = 0.001          # loudest moments below this = a silent room or a dead mic. Only
+                           # that: 0.004 dropped Rudy's normal voice on the built-in mic
+                           # (0.0018-0.0037; the room is 0.0004-0.0005). Telling a voice
+                           # from fan or keyboard noise is the speech detector's job
+                           # (vad_filter in Transcriber), so the model does not invent words.
 FRAME_SECONDS = 0.1        # loudness is measured per tenth of a second...
 LOUD_PERCENTILE = 90       # ...and judged on the loudest tenth of those, so pauses and the
                            # microphone start-up cannot hide quiet speech, and one bump
@@ -317,7 +321,7 @@ class Transcriber:
         model = self.load(cfg.get("dictation_model", "base"), cfg.get("dictation_threads", 4))
         segs, _ = model.transcribe(
             audio, language=cfg.get("dictation_language") or None, beam_size=1,
-            vad_filter=False, condition_on_previous_text=False, without_timestamps=True,
+            vad_filter=True, condition_on_previous_text=False, without_timestamps=True,
             initial_prompt=hint or None)
         return " ".join(s.text.strip() for s in segs).strip()
 

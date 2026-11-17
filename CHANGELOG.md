@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.3 — Dictation hears a normal speaking voice (2026-11-17)
+
+### Fixed
+- **A normal voice on a laptop's built-in microphone is no longer "Didn't hear anything".** 2.4.2 still asked for a loudness that this kind of microphone only reaches when you speak up. The line is now just "is the microphone picking anything up at all". Telling your voice apart from a fan or keyboard noise is done by the speech model's own speech detector, which is now switched on, so it still does not invent words from noise.
+
 ## 2.4.2 — Dictation hears a quiet voice (2026-11-17)
 
 ### Fixed

@@ -296,13 +296,13 @@ def t_silence_log_says_why():
     h = logging.Handler(); h.emit = lambda r: seen.append(r.getMessage())
     D.log.addHandler(h); old_level = D.log.level; D.log.setLevel(logging.INFO)
     try:
-        svc = service(audio=np.full(D.SR * 2, 0.001, np.float32))
+        svc = service(audio=np.full(D.SR * 2, 0.0005, np.float32))
         svc._mic_wait = 3.2
         assert svc.process(svc.mic.audio, time.perf_counter()) is None
     finally:
         D.log.removeHandler(h); D.log.setLevel(old_level)
     line =[m for m in seen if "silence" in m]
-    assert line and "loudness 0.0010" in line[0] and "microphone took 3.2 s" in line[0], seen
+    assert line and "loudness 0.0005" in line[0] and "microphone took 3.2 s" in line[0], seen
 
 
 def _quiet_speech():
@@ -319,10 +319,41 @@ def _quiet_speech():
 
 def t_quiet_speech_with_pauses_is_heard():
     audio = _quiet_speech()
-    assert float(np.sqrt(np.mean(audio ** 2))) < D.QUIET_RMS, "the average must be under the old cut-off"
+    assert float(np.sqrt(np.mean(audio ** 2))) < 0.004, "the average must be under the 2.4.1 cut-off"
     svc = service(text="this is quiet", audio=audio)
     assert svc.process(audio, time.perf_counter()) is not None, svc.desktop.flashes
     assert svc.desktop.pasted, "quiet speech with pauses must be typed"
+
+
+def t_rudys_quiet_voice_is_heard():
+    # 17 Nov, 19:06, on 2.4.2: three tries dropped with loudest moments 0.0037, 0.0018,
+    # 0.0018 against 0.004. His own meeting voice turned down to 0.0018 still gave the
+    # speech model 3-11 words per 3 s, so a voice that quiet must reach the model.
+    rng = np.random.default_rng(3)
+    parts = []
+    for _ in range(3):
+        parts.append(rng.normal(0, 0.0018, int(D.SR * 0.5)).astype(np.float32))
+        parts.append(rng.normal(0, 0.0004, int(D.SR * 0.2)).astype(np.float32))
+    audio = np.concatenate(parts)
+    svc = service(text="said quietly", audio=audio)
+    assert svc.process(audio, time.perf_counter()) is not None, svc.desktop.flashes
+    assert svc.desktop.pasted == ["said quietly"]
+
+
+def t_speech_detector_is_on():
+    # With the loudness line lowered, the model's own speech detector is what stops it
+    # making words up from a fan or keyboard noise. It must be switched on.
+    seen = {}
+
+    class Model:
+        def transcribe(self, audio, **kw):
+            seen.update(kw)
+            return iter(()), None
+
+    t = D.Transcriber()
+    t._model, t._key = Model(), ("base", 4)
+    assert t(np.zeros(D.SR, np.float32), {"dictation_model": "base", "dictation_threads": 4}) == ""
+    assert seen.get("vad_filter") is True, seen
 
 
 def t_room_noise_with_a_click_is_silence():
@@ -672,6 +703,8 @@ check("settings get their defaults", t_defaults_filled)
 check("silence and key taps type nothing", t_silence_not_typed)
 check("the silence log line says how loud and how slow the microphone was", t_silence_log_says_why)
 check("quiet speech with pauses is heard (judged by its loudest moments)", t_quiet_speech_with_pauses_is_heard)
+check("Rudy's quiet voice (loudest moments 0.0018) reaches the speech model", t_rudys_quiet_voice_is_heard)
+check("the speech model's own speech detector is on", t_speech_detector_is_on)
 check("room noise with one bump of the desk is still silence", t_room_noise_with_a_click_is_silence)
 check("speech is typed with the word list applied and counted", t_typed_with_word_list)
 check("nothing is typed into a password box; it is kept in history", t_password_box_held)
