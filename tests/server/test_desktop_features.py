@@ -300,3 +300,32 @@ def test_a_test_copy_with_its_own_folder_runs_beside_the_installed_one(monkeypat
     one = notewell.instance_name("Local\\Notewell")
     monkeypatch.setattr(notewell, "HOME", tmp_path / "other")
     assert one.startswith("Local\\Notewell.") and notewell.instance_name("Local\\Notewell") != one
+
+
+# ------------------------------------------------ your account (desktop only) ---
+def test_a_server_has_no_account_screen(client, admin, app_module, monkeypatch):
+    monkeypatch.setattr(app_module.recorder_bridge, "_account", None)
+    assert client.get("/account", headers=admin).status_code == 501
+
+
+def test_the_dashboard_signs_this_pc_in(client, admin, app_module, monkeypatch):
+    state = {"linked": False}
+
+    def sign_in(url, email, password):
+        if password != "right-not-real":
+            raise ValueError("Wrong email or password")
+        state.update({"linked": True, "url": url, "pass": "device pass", "signed_in_as": {"email": email}})
+        return state
+
+    monkeypatch.setattr(app_module.recorder_bridge, "_account", None)
+    app_module.recorder_bridge.attach_account(status=lambda: state, sign_in=sign_in)
+    assert client.get("/account", headers=admin).json() == {"linked": False}
+    form = {"url": "https://far.test", "email": "rudy@far.test"}
+    bad = client.post("/account/signin", headers=admin, json={**form, "password": "wrong"})
+    assert bad.status_code == 422 and "Wrong email" in bad.json()["detail"]
+    ok = client.post("/account/signin", headers=admin, json={**form, "password": "right-not-real"})
+    assert ok.status_code == 200 and ok.json()["pass"] == "device pass"
+    assert "right-not-real" not in ok.text
+    alice = {"X-API-Key": make_user(client, admin)["api_key"]}
+    assert client.get("/account", headers=alice).status_code == 403
+    assert client.post("/account/signin", headers=alice, json={**form, "password": "x"}).status_code == 403

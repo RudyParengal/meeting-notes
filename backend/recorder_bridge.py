@@ -39,6 +39,20 @@ def dictation():
     return _dictation
 
 
+# The account on your own server (desktop/linked_server.py), desktop app only:
+# {"status": () -> dict, "sign_in": (url, email, password) -> dict}
+_account: Optional[dict] = None
+
+
+def attach_account(*, status: Callable[[], dict], sign_in: Callable[[str, str, str], dict]) -> None:
+    global _account
+    _account = {"status": status, "sign_in": sign_in}
+
+
+def account() -> Optional[dict]:
+    return _account
+
+
 # Settings the dashboard may change. Everything else in the recorder's config
 # stays file-only, on purpose: those are tuning values, not choices.
 EDITABLE = {"audio_source": str, "language": str, "auto_detect": bool,

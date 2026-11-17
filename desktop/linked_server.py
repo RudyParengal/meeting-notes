@@ -11,6 +11,12 @@ Then, once a minute:
   - a meeting the recorder had to hand to this app instead (the server did not
     answer) is sent to the server once it answers, under the same id
 
+  - the dictation word list and history are shared with the account, so every
+    device signed in to it has the same words and the same history
+
+Signing in (sign_in) swaps an email and password for this PC's own device
+pass, which replaces the key in linked-server.json.
+
 Nothing here is ever deleted. A note the server erased stays on this PC.
 Edits to a note's text stay on this PC: the server has no way to receive them.
 
@@ -21,6 +27,7 @@ locked to this Windows user (backend/sealed.py) the first time it is read.
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 
 import requests
@@ -46,14 +53,47 @@ def _row(item: dict, trashed: bool) -> dict:
             "status": item.get("status"), "title": item.get("title")}
 
 
+def _https(url: str) -> str:
+    url = (url or "").strip().rstrip("/")
+    if not url.startswith("https://"):
+        raise ValueError("The server address must start with https://")
+    return url
+
+
+def sign_in(home: Path, url: str, email: str, password: str, device_name: str) -> str:
+    """Swap email + password for this PC's own device pass, and keep it in
+    linked-server.json (sealed to this Windows user). The file it replaces is
+    kept beside it as linked-server.json.bak-<time>. Returns the pass, which
+    the caller hands to the recorder; it is never logged."""
+    url = _https(url)
+    r = requests.post(url + "/auth/device-signin", timeout=30, allow_redirects=False,
+                      headers={"User-Agent": "Notewell"},
+                      json={"email": email.strip(), "password": password, "device_name": device_name[:80]})
+    if r.status_code in (401, 429):
+        try:
+            detail = r.json().get("detail")
+        except ValueError:
+            detail = None
+        raise ValueError(detail or "Wrong email or password")
+    if r.status_code in (404, 405):
+        raise ValueError("That server does not have accounts yet")
+    r.raise_for_status()
+    key = r.json()["pass"]
+    path = home / "linked-server.json"
+    if path.exists():
+        path.with_name(f"linked-server.json.bak-{int(time.time())}").write_bytes(path.read_bytes())
+    path.write_text(json.dumps({"url": url, "api_key": sealed.seal(key) if sealed.available() else key},
+                               indent=2), encoding="utf-8")
+    return key
+
+
 class Link:
-    def __init__(self, home: Path, storage, owner: str):
+    def __init__(self, home: Path, storage, owner: str, dictation=None):
         cfg = read_link(home)
-        self.url = cfg["url"].rstrip("/")
-        if not self.url.startswith("https://"):
-            raise ValueError("linked-server.json: url must start with https://")
+        self.url = _https(cfg["url"])
         self.http = requests.Session()
         self.http.headers.update({"X-API-Key": cfg["api_key"], "User-Agent": "Notewell"})
+        self.dictation = dictation or (lambda: None)   # the word store, once dictation has started
         self.storage, self.owner = storage, owner
         self.state_file = home / "linked-state.json"
         self.undelivered = home / "recorder" / "undelivered.txt"
@@ -177,6 +217,46 @@ class Link:
         self.state_file.write_text(json.dumps(self.state), encoding="utf-8")
         return n
 
+    def sync_dictation(self, store) -> dict:
+        """The dictation word list and history, shared with every device on the account.
+        A server without these routes (older than accounts) is skipped quietly."""
+        try:
+            words = self._send("POST", "/account/words", json={"words": store.words_for_sync()}).json()
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code in (404, 405):
+                return {}
+            raise
+        store.merge_words(words["words"])
+        n = {"words": len(words["words"]), "sent": 0, "received": 0}
+        for _ in range(50):                        # at most 25,000 rows a pass
+            state, unsent = store.sync_state(), store.unsent_dictations(500)
+            got = self._send("POST", "/account/dictations",
+                             json={"items": unsent, **state}).json()
+            store.mark_sent([d["uid"] for d in unsent])
+            store.merge_dictations(got["items"], got["cursor"], got["cleared_at"])
+            n["sent"] += len(unsent)
+            n["received"] += len(got["items"])
+            if not got["more"] and len(unsent) < 500:
+                break
+        return n
+
+    def set_key(self, key: str, url: str) -> None:
+        """A new pass (after signing in): used from the next request on."""
+        self.url = _https(url)
+        self.http.headers["X-API-Key"] = key
+        self.wake.set()
+
+    def account(self) -> dict:
+        """Who this PC is signed in as on the server. Never includes the key."""
+        key = self.http.headers.get("X-API-Key", "")
+        out = {"linked": True, "url": self.url,
+               "pass": "device pass" if key.startswith("nwd_") else "shared key"}
+        try:
+            out["signed_in_as"] = self._get("/me")
+        except Exception as e:
+            out["error"] = f"server not reached: {type(e).__name__}"
+        return out
+
     def run(self):
         while True:
             try:
@@ -185,15 +265,23 @@ class Link:
                     log.info("linked server: %s", n)
             except Exception as e:
                 log.warning("linked server not reached: %s", e)
+            store = self.dictation()
+            if store is not None:
+                try:
+                    n = self.sync_dictation(store)
+                    if n.get("sent") or n.get("received"):
+                        log.info("dictation synced: %s", n)
+                except Exception as e:
+                    log.warning("dictation not synced: %s", e)
             self.wake.wait(INTERVAL)
             self.wake.clear()
 
 
-def start(home: Path, storage, owner: str):
+def start(home: Path, storage, owner: str, dictation=None):
     """Start syncing in the background if linked-server.json exists; else do nothing."""
     if not (home / "linked-server.json").exists():
         return None
-    link = Link(home, storage, owner)
+    link = Link(home, storage, owner, dictation)
     threading.Thread(target=link.run, daemon=True, name="linked").start()
     log.info("linked to %s", link.url)
     return link

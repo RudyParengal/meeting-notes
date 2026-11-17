@@ -210,12 +210,39 @@ def run() -> None:
     srv = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=port,
                                         log_config=None, access_log=False))
     threading.Thread(target=srv.run, daemon=True, name="server").start()
+    import linked_server
+    held = {}
+
+    def word_store():
+        return held["dictation"].store if held.get("dictation") else None
+
     try:
-        import linked_server
-        linked_server.start(HOME, server.storage, ADMIN)
+        held["link"] = linked_server.start(HOME, server.storage, ADMIN, dictation=word_store)
     except Exception:
         logging.getLogger("linked").exception("linked-server.json could not be used")
-    held = {}
+
+    def account_status():
+        link = held.get("link")
+        return link.account() if link else {"linked": False}
+
+    def account_sign_in(url, email, password):
+        """Sign this PC in with its own pass. Meetings, notes and dictation use it
+        from the next request; nothing has to restart."""
+        name = f"Notewell on {os.environ.get('COMPUTERNAME') or 'this PC'}"
+        new_pass = linked_server.sign_in(HOME, url, email, password, name)
+        keys = prepare_recorder_config(port, key)        # re-reads linked-server.json
+        recorder.KEYS.update(keys)
+        cfg = held.get("cfg")
+        if cfg is not None:                              # the recorder's live settings
+            cfg.update(keys, api_url=linked_server._https(url), fallback_api_url=f"http://127.0.0.1:{port}")
+        if held.get("link"):
+            held["link"].set_key(new_pass, url)
+        else:
+            held["link"] = linked_server.start(HOME, server.storage, ADMIN, dictation=word_store)
+        logging.getLogger("linked").info("signed in to %s as %s", held["link"].url, email)
+        return account_status()
+
+    recorder_bridge.attach_account(status=account_status, sign_in=account_sign_in)
 
     def warm_up(ctl):
         """Load (on first start, download) the speech model before the first meeting
@@ -244,7 +271,7 @@ def run() -> None:
             logging.getLogger("dictation").exception("dictation could not start")
 
     def on_ready(ctl):
-        held["manager"] = ctl["manager"]
+        held["manager"], held["cfg"] = ctl["manager"], ctl["cfg"]
         recorder_bridge.attach(**ctl)
         start_dictation(ctl)
         # Imported audio files use the recorder's model: one copy in memory, one download.

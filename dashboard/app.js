@@ -843,11 +843,51 @@ function renderSettings() {
   var page = h('div', { class: 'page narrow' }, h('h1', {}, 'Settings'), h('p', { class: 'dim', style: 'margin:0 0 20px' }, 'Changes take effect straight away.'));
   if (!isAdmin()) { page.appendChild(h('div', { class: 'card' }, 'Only the administrator can change settings.')); main.appendChild(page); return; }
   page.appendChild(aiCard());
+  if (rec) page.appendChild(h('div', { id: 'account-card' }));
   if (rec) page.appendChild(recordingCard());
   if (rec) page.appendChild(h('div', { id: 'dictation-cards' }));
   if (!rec) page.appendChild(peopleCard());
   main.appendChild(page);
-  if (rec) loadDictation();
+  if (rec) { loadAccount(); loadDictation(); }
+}
+
+// --- your account on your own server (desktop app only) ------------------------------------
+
+async function loadAccount() {
+  var box = $('account-card');
+  if (!box) return;
+  var acc = null;
+  try { var r = await api('/account'); acc = r.ok ? await r.json() : null; } catch (e) { acc = null; }
+  box.innerHTML = '';
+  if (!acc) return;
+  box.appendChild(accountCard(acc));
+}
+
+function accountCard(acc) {
+  var who = acc.signed_in_as;
+  var own = acc.pass === 'device pass';
+  var status;
+  if (!acc.linked) status = 'Not signed in. Notes, words and dictation history stay on this computer only.';
+  else if (!who) status = 'Your server did not answer just now (' + (acc.error || 'no reply') + '). Notewell keeps working and catches up when it does.';
+  else if (own) status = 'Signed in as ' + who.email + '. Your notes, word list and dictation history are shared with your other devices.';
+  else status = 'Connected with the old shared key. Sign in below so this computer has its own pass.';
+  var url = h('input', { type: 'text', placeholder: 'https://notes.example.com', value: acc.url || '' });
+  var email = h('input', { type: 'email', placeholder: 'you@example.com', value: (who && who.email) || '' });
+  var pw = h('input', { type: 'password', placeholder: 'Password' });
+  var go = h('button', { class: 'btn primary', onclick: async function() {
+    go.disabled = true;
+    var form = { url: url.value, email: email.value };
+    form[pw.type] = pw.value;                      // the typed password, never stored here
+    var r = await api('/account/signin', { method: 'POST', json: form });
+    go.disabled = false;
+    pw.value = '';
+    if (!r.ok) { toast('Not signed in: ' + await errorText(r)); return; }
+    toast('Signed in');
+    await loadAccount();
+  } }, own ? 'Sign in again' : 'Sign in');
+  return h('div', { class: 'card' }, h('h2', {}, 'Your account'),
+    h('p', { class: 'hint' }, own ? h('span', { class: 'pill ok', style: 'margin-right:8px' }, 'Signed in') : null, status),
+    h('div', { class: 'row', style: 'display:grid;gap:8px;max-width:420px' }, url, email, pw, go));
 }
 
 // --- dictation (desktop app only) ----------------------------------------------------------
@@ -956,7 +996,7 @@ function wordsCard() {
 function historyCard() {
   var list = h('div', {}, h('p', { class: 'dim' }, 'Loading…'));
   var card = h('div', { class: 'card' }, h('h2', {}, 'Dictation history'),
-    h('p', { class: 'hint' }, 'Kept on this computer only. ', h('b', {}, prettyKeys(dict.repaste_hotkey) || 'The repaste shortcut'), ' types the latest one again.'),
+    h('p', { class: 'hint' }, 'Kept on this computer, and on your other devices when you are signed in to your account. ', h('b', {}, prettyKeys(dict.repaste_hotkey) || 'The repaste shortcut'), ' types the latest one again.'),
     list);
   var oldest = null;
   var more = h('button', { class: 'btn small', style: 'display:none', onclick: function() { page(); } }, 'Show older');

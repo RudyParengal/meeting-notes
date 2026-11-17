@@ -833,6 +833,37 @@ def dictation_clear_history(admin: dict = Depends(admin_only)):
     return {"cleared": n}
 
 
+# ------------------------------- your account on your server (desktop only) ---
+def _account() -> dict:
+    acc = recorder_bridge.account()
+    if acc is None:
+        raise HTTPException(501, "Signing in to your server is part of the Notewell desktop app.")
+    return acc
+
+
+class AccountSignIn(BaseModel):
+    url: str = Field(..., max_length=200)
+    email: str = Field(..., max_length=200)
+    password: str = Field(..., min_length=1, max_length=200)
+
+
+@app.get("/account")
+async def account_status(admin: dict = Depends(admin_only)):
+    return await asyncio.to_thread(_account()["status"])
+
+
+@app.post("/account/signin")
+async def account_sign_in(req: AccountSignIn, admin: dict = Depends(admin_only)):
+    acc = _account()
+    try:
+        return await asyncio.to_thread(acc["sign_in"], req.url, req.email, req.password)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:
+        log.warning("account sign-in failed: %s", type(e).__name__)
+        raise HTTPException(502, "Your server could not be reached. Check the address and try again.")
+
+
 # ------------------------------------------------------------- dashboard ---
 app.mount("/static", StaticFiles(directory=str(DASHBOARD_DIR)), name="static")
 

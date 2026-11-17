@@ -169,3 +169,157 @@ def test_only_an_https_server_is_accepted(tmp_path, app_module):
 
 def test_without_the_file_nothing_starts(tmp_path, app_module):
     assert linked_server.start(tmp_path, app_module.storage, OWNER) is None
+
+
+# ------------------------------------------- dictation shared with the account ---
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "windows-recorder"))
+from dictation_store import Store  # noqa: E402
+
+
+class Reply:
+    def __init__(self, body):
+        self.body = body
+
+    def json(self):
+        return self.body
+
+
+class FarAccount:
+    """The far server's /account/words and /account/dictations, held in memory,
+    following the rules of the server's backend/dictation_sync.py."""
+
+    def __init__(self):
+        self.words, self.rows, self.cleared, self.seq = {}, [], 0.0, 0
+
+    def send(self, method, path, json=None):
+        if path == "/account/words":
+            for w in json["words"]:
+                old = self.words.get(w["uid"])
+                if old is None or w["updated_at"] > old["updated_at"]:
+                    self.words[w["uid"]] = dict(w)
+            return Reply({"words": list(self.words.values())})
+        if json["cleared_at"] > self.cleared:
+            self.cleared = json["cleared_at"]
+            self.rows = [r for r in self.rows if r["created_at"] > self.cleared]
+        have = {r["uid"] for r in self.rows}
+        for d in json["items"]:
+            if d["created_at"] > self.cleared and d["uid"] not in have:
+                self.seq += 1
+                self.rows.append({**d, "seq": self.seq})
+        after = [r for r in self.rows if r["seq"] > json["since"]]
+        page = after[:500]
+        return Reply({"items": page, "cursor": page[-1]["seq"] if page else json["since"],
+                      "more": len(after) > 500, "cleared_at": self.cleared})
+
+
+def _account_link(tmp_path, app_module, far, name):
+    home = tmp_path / name
+    (home / "recorder").mkdir(parents=True)
+    (home / "linked-server.json").write_text(json.dumps({"url": "https://far.test", "api_key": "nwd_not-real"}))
+    lk = linked_server.Link(home, app_module.storage, OWNER)
+    lk._send = far.send
+    return lk, Store(home / "dictation.db")
+
+
+def test_words_and_dictations_made_on_one_pc_reach_another(tmp_path, app_module):
+    far = FarAccount()
+    laptop, laptop_store = _account_link(tmp_path, app_module, far, "laptop")
+    other, other_store = _account_link(tmp_path, app_module, far, "other")
+    laptop_store.add_word("Parengal", "para angle")
+    laptop_store.add_dictation("Send the Parengal proposal", "send the para angle proposal", app="word.exe")
+    assert laptop.sync_dictation(laptop_store)["sent"] == 1
+    assert other.sync_dictation(other_store)["received"] == 1
+    assert [w["term"] for w in other_store.words()] == ["Parengal"]
+    assert [d["text"] for d in other_store.history()] == ["Send the Parengal proposal"]
+    assert laptop.sync_dictation(laptop_store)["sent"] == 0      # never sent twice
+
+
+def test_a_word_removed_on_one_pc_is_removed_on_the_other(tmp_path, app_module):
+    far = FarAccount()
+    laptop, laptop_store = _account_link(tmp_path, app_module, far, "laptop")
+    other, other_store = _account_link(tmp_path, app_module, far, "other")
+    w = laptop_store.add_word("Notewell")
+    laptop.sync_dictation(laptop_store)
+    other.sync_dictation(other_store)
+    assert [x["term"] for x in other_store.words()] == ["Notewell"]
+    laptop_store.delete_word(w["id"])
+    laptop.sync_dictation(laptop_store)
+    other.sync_dictation(other_store)
+    assert other_store.words() == []
+
+
+def test_more_than_one_page_of_history_arrives_in_one_pass(tmp_path, app_module):
+    far = FarAccount()
+    laptop, laptop_store = _account_link(tmp_path, app_module, far, "laptop")
+    other, other_store = _account_link(tmp_path, app_module, far, "other")
+    for i in range(620):
+        laptop_store.add_dictation(f"dictation {i}", "", app="notepad.exe")
+    assert laptop.sync_dictation(laptop_store)["sent"] == 620
+    assert other.sync_dictation(other_store)["received"] == 620
+
+
+def test_a_server_without_accounts_is_skipped_quietly(tmp_path, app_module):
+    lk, store = _account_link(tmp_path, app_module, FarAccount(), "laptop")
+
+    def older_server(method, path, json=None):
+        raise linked_server.requests.HTTPError(response=type("R", (), {"status_code": 404})())
+    lk._send = older_server
+    assert lk.sync_dictation(store) == {}
+
+
+# ----------------------------------------------------------- signing in ---
+class Posted:
+    def __init__(self, status, body):
+        self.status_code, self.body = status, body
+
+    def json(self):
+        return self.body
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise linked_server.requests.HTTPError(response=self)
+
+
+def test_signing_in_keeps_the_new_pass_and_a_copy_of_the_old_file(tmp_path, monkeypatch):
+    old = {"url": "https://far.test", "api_key": "shared-not-real"}
+    (tmp_path / "linked-server.json").write_text(json.dumps(old))
+    sent = {}
+
+    def post(url, json=None, **kw):
+        sent.update(url=url, body=json)
+        return Posted(200, {"device_id": 7, "pass": "nwd_new-not-real"})
+    monkeypatch.setattr(linked_server.requests, "post", post)
+    key = linked_server.sign_in(tmp_path, "https://far.test/", "rudy@far.test", "pw-not-real", "Notewell on PC")
+    assert key == "nwd_new-not-real"
+    assert sent["url"] == "https://far.test/auth/device-signin"
+    assert sent["body"]["device_name"] == "Notewell on PC"
+    assert linked_server.read_link(tmp_path) == {"url": "https://far.test", "api_key": "nwd_new-not-real"}
+    backups = list(tmp_path.glob("linked-server.json.bak-*"))
+    assert len(backups) == 1 and json.loads(backups[0].read_text()) == old
+    assert "pw-not-real" not in (tmp_path / "linked-server.json").read_text()
+
+
+def test_a_wrong_password_changes_nothing(tmp_path, monkeypatch):
+    (tmp_path / "linked-server.json").write_text(json.dumps({"url": "https://far.test", "api_key": "shared"}))
+    before = (tmp_path / "linked-server.json").read_text()
+    monkeypatch.setattr(linked_server.requests, "post",
+                        lambda *a, **k: Posted(401, {"detail": "Wrong email or password"}))
+    with pytest.raises(ValueError, match="Wrong email or password"):
+        linked_server.sign_in(tmp_path, "https://far.test", "rudy@far.test", "nope", "PC")
+    assert (tmp_path / "linked-server.json").read_text() == before
+    assert not list(tmp_path.glob("linked-server.json.bak-*"))
+
+
+def test_signing_in_needs_an_https_address(tmp_path):
+    with pytest.raises(ValueError, match="https"):
+        linked_server.sign_in(tmp_path, "http://far.test", "a@b.test", "pw", "PC")
+
+
+def test_a_new_pass_is_used_at_once_and_never_shown(link):
+    link._get = lambda path, **p: {"email": "rudy@far.test", "name": "Rudy", "role": "admin"}
+    assert link.account()["pass"] == "shared key"
+    link.set_key("nwd_secret-not-real", "https://far.test")
+    acc = link.account()
+    assert link.http.headers["X-API-Key"] == "nwd_secret-not-real"
+    assert acc["pass"] == "device pass" and acc["signed_in_as"]["email"] == "rudy@far.test"
+    assert "secret-not-real" not in json.dumps(acc)
