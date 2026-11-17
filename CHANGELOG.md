@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.1 — Fewer "server not reached" messages (2026-11-17)
+
+### Fixed
+- **A connection cut on the way to your server is now tried again.** On some PCs a burst of new connections is sometimes dropped before it reaches the server, which showed "Your server did not answer just now (server not reached)" even though everything had worked. Reads are tried up to twice more; an upload is only sent again if it never left the PC, so a meeting is never sent twice.
+
 ## 2.4.0 — Sign in to your notes server; dictation follows your account (2026-11-17)
 
 ### Added
