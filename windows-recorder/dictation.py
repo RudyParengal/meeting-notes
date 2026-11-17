@@ -586,7 +586,10 @@ class DictationService:
             return None
         level = float(np.sqrt(np.mean(audio ** 2))) if len(audio) else 0.0
         if level < QUIET_RMS:
-            log.info("dictation: %.1f s of silence, nothing typed", seconds)
+            wait = self._mic_wait
+            log.info("dictation: %.1f s of silence, nothing typed; loudness %.4f (needs %.3f); "
+                     "microphone took %s to start", seconds, level, QUIET_RMS,
+                     f"{wait:.1f} s" if wait is not None else "?")
             self.desktop.flash("Didn't hear anything")
             return None
         words = self.store.words()

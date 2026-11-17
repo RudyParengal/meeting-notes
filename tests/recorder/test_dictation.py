@@ -288,6 +288,23 @@ def t_silence_not_typed():
     assert svc.process(svc.mic.audio, time.perf_counter()) is None and svc.desktop.pasted == []
 
 
+def t_silence_log_says_why():
+    # 17 Nov: three "Didn't hear anything" in a row could not be explained from the log.
+    # The silence line must say how loud it was and how long the microphone took to start.
+    import logging
+    seen = []
+    h = logging.Handler(); h.emit = lambda r: seen.append(r.getMessage())
+    D.log.addHandler(h); old_level = D.log.level; D.log.setLevel(logging.INFO)
+    try:
+        svc = service(audio=np.full(D.SR * 2, 0.001, np.float32))
+        svc._mic_wait = 3.2
+        assert svc.process(svc.mic.audio, time.perf_counter()) is None
+    finally:
+        D.log.removeHandler(h); D.log.setLevel(old_level)
+    line =[m for m in seen if "silence" in m]
+    assert line and "loudness 0.0010" in line[0] and "microphone took 3.2 s" in line[0], seen
+
+
 def t_typed_with_word_list():
     svc = service(text="I sent it to note well today")
     w = svc.store.add_word("Notewell", "note well")
@@ -624,6 +641,7 @@ check("only AI providers that do not train on text are allowed", t_private_provi
 check("AI tidy-up: right request, refuses other providers, rejects odd answers", t_ai_tidy)
 check("settings get their defaults", t_defaults_filled)
 check("silence and key taps type nothing", t_silence_not_typed)
+check("the silence log line says how loud and how slow the microphone was", t_silence_log_says_why)
 check("speech is typed with the word list applied and counted", t_typed_with_word_list)
 check("nothing is typed into a password box; it is kept in history", t_password_box_held)
 check("tidy-up off: the AI is never contacted", t_tidy_off_never_calls_ai)
