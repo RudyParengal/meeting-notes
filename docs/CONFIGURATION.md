@@ -143,7 +143,7 @@ The installer writes this file. After editing, right-click the tray icon → **Q
 | `archive_backups` | `true` | After a note is safely stored, move the backup audio to `%USERPROFILE%\MeetingArchive` |
 | `archive_retention_days` | `30` | Archived audio older than this is cleared automatically |
 | `dictation_enabled` | `true` | Hold-to-talk dictation in the Windows app. `false` = the keys do nothing and the microphone is never opened for it |
-| `dictation_hotkey` | `ctrl+shift` | Hold to talk, let go to type |
+| `dictation_hotkey` | `ctrl+shift` | Hold to talk, let go to type; or tap once for hands-free and tap again to type (Esc cancels) |
 | `dictation_repaste_hotkey` | `alt+shift+v` | Paste the last dictation again |
 | `dictation_model` | `base` | Speech model for dictation (`tiny` is quicker, `small` more accurate) |
 | `dictation_language` | `en` | Language spoken |

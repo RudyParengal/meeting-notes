@@ -285,7 +285,85 @@ def service(text="hello there", desktop=None, ai=None, cfg=None, audio=SPEECH):
                              transcriber=FakeModel(text), mic=FakeMic(audio),
                              get_ai=(lambda: ai) if ai is not None else None)
     svc.saves = saves
+    svc.show_after = 0       # the older tests check the bubble straight away...
+    svc.tap_seconds = 0      # ...and treat every press as a hold; the tap tests set these back
     return svc
+
+
+def handsfree_service(**kw):
+    svc = service(**kw)
+    svc.tap_seconds = D.TAP_SECONDS
+    return svc
+
+
+def t_shortcut_does_not_flash_bubble():
+    # Ctrl+Shift+T and the like: the keys start dictation, the T cancels it a moment
+    # later. 2.4.4 showed the bubble for that moment; it must not appear at all.
+    svc = service()
+    svc.show_after = 0.15
+    svc.on_hotkey("dictate", "start")
+    svc.on_hotkey("dictate", "cancel")
+    time.sleep(0.3)
+    assert svc.desktop.shown == [], f"bubble flashed: {svc.desktop.shown}"
+    assert svc.state == "ready" and svc._jobs.qsize() == 0
+
+
+def t_bubble_shows_after_a_real_hold():
+    svc = service()
+    svc.show_after = 0.05
+    svc.on_hotkey("dictate", "start")
+    assert svc.mic.started == 1, "the microphone starts at once, so no words are lost"
+    time.sleep(0.2)
+    assert svc.desktop.shown == ["waiting"], svc.desktop.shown
+    svc.mic.on_live()
+    assert svc.desktop.shown[-1] == "listening"
+
+
+def t_tap_starts_handsfree_and_tap_again_types():
+    svc = handsfree_service()
+    svc.on_hotkey("dictate", "start")
+    svc.on_hotkey("dictate", "stop")                       # let go at once: a tap
+    assert svc.state == "listening" and svc._jobs.qsize() == 0, "a tap keeps listening"
+    assert "abandon" in svc._hotkeys(), "Esc throws a hands-free recording away"
+    svc.mic.on_live()
+    assert svc.desktop.shown[-1] == "handsfree"
+    svc.on_hotkey("dictate", "start")                      # second tap
+    assert svc._jobs.qsize() == 0 and svc.mic.started == 1
+    svc.on_hotkey("dictate", "stop")
+    assert svc.state == "writing" and svc._jobs.qsize() == 1
+    assert "abandon" not in svc._hotkeys(), "Esc is given back to other programs"
+    assert svc.desktop.masks == 2, "the second tap must not set off Windows either"
+
+
+def t_long_hold_still_types_on_release():
+    svc = handsfree_service()
+    svc.on_hotkey("dictate", "start")
+    svc._t_start -= 1.0                                    # held for a second
+    svc.on_hotkey("dictate", "stop")
+    assert svc.state == "writing" and svc._jobs.qsize() == 1
+
+
+def t_shortcut_during_handsfree_keeps_recording():
+    svc = handsfree_service()
+    svc.on_hotkey("dictate", "start")
+    svc.on_hotkey("dictate", "stop")
+    svc.on_hotkey("dictate", "start")                      # Ctrl+Shift+T mid-recording
+    svc.on_hotkey("dictate", "cancel")
+    assert svc.state == "listening" and svc._jobs.qsize() == 0
+    svc.on_hotkey("dictate", "start")
+    svc.on_hotkey("dictate", "stop")
+    assert svc.state == "writing" and svc._jobs.qsize() == 1
+
+
+def t_escape_abandons_handsfree():
+    svc = handsfree_service()
+    svc.on_hotkey("dictate", "start")
+    svc.on_hotkey("dictate", "stop")
+    svc.on_hotkey("abandon", "start")
+    assert svc.state == "ready" and svc._jobs.qsize() == 0 and svc.desktop.hidden == 1
+    assert "abandon" not in svc._hotkeys()
+    svc.on_hotkey("abandon", "start")                      # Esc when nothing is recording: nothing
+    assert svc.state == "ready" and svc.desktop.hidden == 1
 
 
 def t_defaults_filled():
@@ -736,6 +814,12 @@ check("the keys open and close the microphone; the bubble says 'Wait' until it i
 check("the microphone is not opened when Notewell starts", t_no_mic_open_at_start_up)
 check("the microphone says when sound first arrives", t_mic_says_when_live)
 check("a microphone that starts after the key is let go changes nothing", t_late_mic_does_not_say_listening)
+check("a Ctrl+Shift+letter shortcut never flashes the bubble", t_shortcut_does_not_flash_bubble)
+check("a real hold shows the bubble after a moment; the mic starts at once", t_bubble_shows_after_a_real_hold)
+check("tap the keys: hands-free until tapped again, then typed", t_tap_starts_handsfree_and_tap_again_types)
+check("holding the keys still types when let go", t_long_hold_still_types_on_release)
+check("a shortcut used during hands-free does not stop it", t_shortcut_during_handsfree_keeps_recording)
+check("Esc throws a hands-free recording away", t_escape_abandons_handsfree)
 check("settings: every change is checked before anything is saved", t_update_checks_everything_first)
 check("switching dictation off in Settings stops it at once", t_switch_off_while_running)
 check("status says whether the chosen AI may be used", t_status)

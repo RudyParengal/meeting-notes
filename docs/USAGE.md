@@ -41,6 +41,8 @@ If the recorder hears silence for 10 seconds it warns you — usually the wrong 
 2. Hold **Ctrl+Shift** and speak. A small "listening" badge shows at the bottom of the screen.
 3. Let go. The text appears at the cursor, usually within a second.
 
+**Hands-free:** tap **Ctrl+Shift** once (press and let go quickly) instead of holding it. The badge says "Listening - tap to stop". Speak as long as you like (up to 5 minutes), then tap **Ctrl+Shift** again to type it. **Esc** throws it away. Shortcuts such as Ctrl+Shift+T still work while it listens and do not stop it.
+
 - **Wrong window?** Press **Alt+Shift+V** to paste the last dictation again.
 - **Password boxes and password managers are never typed into.** The text goes to the history instead.
 - **Offline.** Speech becomes text on your computer. The optional tidy-up (off by default) is the only part that uses the internet, and only with AI services that do not train on what you send.

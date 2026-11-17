@@ -941,7 +941,7 @@ function dictationCard() {
   var t = d.totals || {};
   return h('div', { class: 'card' },
     h('h2', {}, 'Dictation'),
-    h('p', { class: 'hint' }, 'Hold ', h('b', {}, prettyKeys(d.hotkey)), ' anywhere in Windows, speak, and let go: the words are typed where your cursor is. Speech is turned into text on this computer. Never types into password boxes, and does not disturb a meeting being recorded.'),
+    h('p', { class: 'hint' }, 'Hold ', h('b', {}, prettyKeys(d.hotkey)), ' anywhere in Windows, speak, and let go: the words are typed where your cursor is. Or tap it once to talk hands-free, and tap again to type (Esc cancels). Speech is turned into text on this computer. Never types into password boxes, and does not disturb a meeting being recorded.'),
     d.last_error ? h('div', { class: 'banner warn', style: 'margin:10px 0' }, d.last_error) : null,
     !d.model_ready && d.enabled ? h('div', { class: 'banner info', style: 'margin:10px 0' }, h('span', { class: 'spinner' }), 'Getting the speech model ready…') : null,
     h('label', { class: 'switch' }, on, h('span', {}, h('b', {}, 'Dictation on'),

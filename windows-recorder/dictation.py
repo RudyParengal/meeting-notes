@@ -1,7 +1,8 @@
 """Hold-to-talk dictation for Windows.
 
 Hold the dictation keys (Ctrl+Shift by default) anywhere in Windows, speak,
-let go: the words are typed into whichever app has the cursor. A second key
+let go: the words are typed into whichever app has the cursor. Or tap the keys
+once (hands-free), speak, and tap them again; Esc throws that one away. A second key
 combination (Alt+Shift+V) types the last dictation again.
 
 How it fits together:
@@ -41,6 +42,9 @@ log = logging.getLogger("dictation")
 SR = 16000
 MIN_SECONDS = 0.3          # shorter than this is a key tapped by accident
 MAX_SECONDS = 300          # a key stuck down must not record forever
+TAP_SECONDS = 0.4          # keys let go sooner than this = a tap: keep listening (hands-free)
+SHOW_AFTER = 0.3           # the bubble waits this long, so Ctrl+Shift+T and the like never flash it
+ESC_VK = 0x1B
 QUIET_RMS = 0.001          # loudest moments below this = a silent room or a dead mic. Only
                            # that: 0.004 dropped Rudy's normal voice on the built-in mic
                            # (0.0018-0.0037; the room is 0.0004-0.0005). Telling a voice
@@ -419,6 +423,12 @@ class DictationService:
         self._lock = threading.Lock()   # the microphone thread and the keys both change the bubble
         self._press = 0                 # counts key presses, so a late "mic is live" is ignored
         self._mic_wait = None           # seconds the microphone took to start, last dictation
+        self.show_after = SHOW_AFTER
+        self.tap_seconds = TAP_SECONDS
+        self._handsfree = False         # tapped: listening until the keys are tapped again
+        self._second_press = False      # the keys are down again during hands-free
+        self._revealed = False          # the bubble is showing for this dictation
+        self._live = False              # sound has arrived for this dictation
 
     # ---- start / stop ----
     def start(self):
@@ -444,7 +454,7 @@ class DictationService:
         self.state = "ready"
         # Load the speech model now, so the first dictation is not the slow one.
         threading.Thread(target=self._warm, daemon=True, name="dictation-warm").start()
-        log.info("Dictation on: hold %s to talk; %s types the last one again%s",
+        log.info("Dictation on: hold %s to talk, or tap it for hands-free; %s types the last one again%s",
                  self.cfg["dictation_hotkey"], self.cfg.get("dictation_repaste_hotkey") or "(off)",
                  " [TEST MODE: audio from a file]" if self.test_wav else "")
 
@@ -468,13 +478,22 @@ class DictationService:
             self.mic.stop()
             if self.desktop:
                 self.desktop.hide()
+        self._handsfree = False
         self.state = "off"
 
     def _hotkeys(self):
         keys = {"dictate": parse_hotkey(self.cfg["dictation_hotkey"])[1]}
         if self.cfg.get("dictation_repaste_hotkey"):
             keys["repaste"] = parse_hotkey(self.cfg["dictation_repaste_hotkey"])[1]
+        if self._handsfree:
+            keys["abandon"] = (frozenset({ESC_VK}),)   # Esc is taken only while hands-free
         return keys
+
+    def _set_handsfree(self, on):
+        self._handsfree = on
+        self._second_press = False
+        if self._hook:
+            self._hook.state.set_hotkeys(self._hotkeys())
 
     # ---- settings ----
     def status(self):
@@ -548,38 +567,81 @@ class DictationService:
         """Called for each hotkey start / stop / cancel (never on the hook itself)."""
         if name == "dictate" and action == "start":
             if self.state == "listening":
+                if self._handsfree:            # the second tap; it ends when the keys are let go
+                    self._second_press = True
+                    self.desktop.send_mask_key()
                 return
             self._t_start = time.perf_counter()
             with self._lock:
                 self._press += 1
                 press = self._press
                 self.state = "listening"
-                self.desktop.show("waiting")   # "Listening" only once sound really arrives
+                self._revealed = self._live = False
             self.desktop.send_mask_key()       # stop Win (or Alt) on its own opening Start
-            self.mic.start(on_live=lambda: self._mic_live(press))
+            self.mic.start(on_live=lambda: self._mic_live(press))   # at once, so no words are lost
+            # The bubble waits a moment: Ctrl+Shift+T cancels before it would ever show.
+            if self.show_after <= 0:
+                self._reveal(press)
+            else:
+                threading.Timer(self.show_after, self._reveal, (press,)).start()
+        elif name == "dictate" and action == "cancel" and self._handsfree:
+            self._second_press = False         # a shortcut used while hands-free: keep listening
         elif name == "dictate" and action in ("stop", "cancel"):
             if self.state != "listening":
                 return
-            with self._lock:
-                self._press += 1               # a "mic is live" arriving after this is too late
-            audio = self.mic.stop()
-            self._mic_wait = getattr(self.mic, "opened_after", None)
-            if action == "cancel":
-                self.state = "ready"
-                self.desktop.hide()
-                log.info("dictation cancelled: another key was pressed with the shortcut")
+            if action == "stop" and self._handsfree and not self._second_press:
                 return
-            self.state = "writing"
-            self.desktop.show("writing")
-            self._jobs.put(("dictate", audio, time.perf_counter()))
+            if action == "stop" and not self._handsfree \
+                    and time.perf_counter() - self._t_start < self.tap_seconds:
+                self._set_handsfree(True)      # a tap: keep listening until the next tap
+                log.info("dictation: hands-free until %s is tapped again", self.cfg["dictation_hotkey"])
+                with self._lock:
+                    self._revealed = True
+                    self.desktop.show("handsfree" if self._live else "waiting")
+                return
+            if action == "cancel":
+                log.info("dictation cancelled: another key was pressed with the shortcut")
+            self._end(cancelled=action == "cancel")
+        elif name == "abandon" and action == "start":
+            if self.state == "listening" and self._handsfree:
+                self._end(cancelled=True)
+                log.info("dictation: hands-free recording thrown away (Esc)")
         elif name == "repaste" and action == "start":
             self.desktop.send_mask_key()
             self._jobs.put(("repaste", None, time.perf_counter()))
 
+    def _end(self, cancelled):
+        with self._lock:
+            self._press += 1                   # a late "mic is live" or bubble timer is ignored
+        audio = self.mic.stop()
+        self._mic_wait = getattr(self.mic, "opened_after", None)
+        if self._handsfree:
+            self._set_handsfree(False)
+        if cancelled:
+            self.state = "ready"
+            self.desktop.hide()
+            return
+        self.state = "writing"
+        self.desktop.show("writing")
+        self._jobs.put(("dictate", audio, time.perf_counter()))
+
+    def _bubble_state(self):
+        if not self._live:
+            return "waiting"                   # "Listening" only once sound really arrives
+        return "handsfree" if self._handsfree else "listening"
+
+    def _reveal(self, press):
+        with self._lock:
+            if press == self._press and self.state == "listening" and not self._revealed:
+                self._revealed = True
+                self.desktop.show(self._bubble_state())
+
     def _mic_live(self, press):
         with self._lock:
             if press == self._press and self.state == "listening":
-                self.desktop.show("listening")
+                self._live = True
+                if self._revealed:
+                    self.desktop.show(self._bubble_state())
 
     def _work(self):
         while True:
@@ -962,6 +1024,7 @@ if os.name == "nt":
         screenshots. Lives on the keyboard thread, which runs its message loop."""
         W_, H_ = 230, 40
         STYLES = {"waiting": ("Wait, mic starting...", 0x9A9A9A), "listening": ("Listening", 0x3C3CE8),
+                  "handsfree": ("Listening - tap to stop", 0x3C3CE8),
                   "writing": ("Writing...", 0x2BA6F5)}
         # Windows keeps the window type for the life of the program, so it is registered
         # once, with one callback that finds the bubble it is for (dictation can be

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.5 — Hands-free dictation, and no more flashing badge (2026-11-17)
+
+### Added
+- **Tap Ctrl+Shift once to dictate hands-free.** No need to hold the keys: tap them, speak, tap them again and the words are typed. Esc throws the recording away. Holding the keys works as before. Shortcuts such as Ctrl+Shift+T used while it listens do not stop it.
+
+### Fixed
+- **The listening badge no longer flashes when you use a Ctrl+Shift shortcut** (Ctrl+Shift+T, Ctrl+Shift+Arrow and so on). The badge now waits a third of a second before showing; the microphone still starts straight away, so no words are lost.
+
 ## 2.4.4 — Dictation keys are now Ctrl+Shift (2026-11-17)
 
 ### Changed
