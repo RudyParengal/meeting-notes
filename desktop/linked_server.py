@@ -31,6 +31,8 @@ import time
 from pathlib import Path
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 
 import sealed
 
@@ -92,6 +94,13 @@ class Link:
         cfg = read_link(home)
         self.url = _https(cfg["url"])
         self.http = requests.Session()
+        # A fresh connection is sometimes cut before it reaches the server (17 Nov:
+        # "server not reached" right after sign-in). Try again twice. Reads are
+        # retried on any cut; uploads only when they never got through, so a
+        # meeting is never sent twice.
+        again = HTTPAdapter(max_retries=Retry(total=2, backoff_factor=0.5, status=0))
+        self.http.mount("https://", again)
+        self.http.mount("http://", again)
         self.http.headers.update({"X-API-Key": cfg["api_key"], "User-Agent": "Notewell"})
         self.dictation = dictation or (lambda: None)   # the word store, once dictation has started
         self.storage, self.owner = storage, owner

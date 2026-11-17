@@ -323,3 +323,73 @@ def test_a_new_pass_is_used_at_once_and_never_shown(link):
     assert link.http.headers["X-API-Key"] == "nwd_secret-not-real"
     assert acc["pass"] == "device pass" and acc["signed_in_as"]["email"] == "rudy@far.test"
     assert "secret-not-real" not in json.dumps(acc)
+
+
+def test_a_connection_cut_before_any_answer_is_tried_again(app_module, tmp_path):
+    """17 Nov: right after sign-in the account check failed with
+    'server not reached: ConnectionError' - the way to the server cut a fresh
+    connection before it got there. One cut must not show as an outage."""
+    import socket
+    import threading
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(4)
+    seen = []
+
+    def serve():
+        for n in range(2):
+            conn, _ = srv.accept()
+            conn.recv(65536)
+            seen.append(n)
+            if n == 0:
+                conn.close()          # hang up without answering
+                continue
+            body = b'{"email": "rudy@far.test", "name": "Rudy", "role": "admin"}'
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
+                         b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
+            conn.close()
+    threading.Thread(target=serve, daemon=True).start()
+
+    (tmp_path / "recorder").mkdir()
+    (tmp_path / "linked-server.json").write_text(
+        json.dumps({"url": "https://far.test", "api_key": "nwd_not-real"}))
+    lk = linked_server.Link(tmp_path, app_module.storage, OWNER)
+    lk.url = "http://127.0.0.1:%d" % srv.getsockname()[1]
+    acc = lk.account()
+    srv.close()
+    assert "error" not in acc, acc
+    assert acc["signed_in_as"]["email"] == "rudy@far.test"
+    assert seen == [0, 1]
+
+
+def test_an_upload_cut_after_sending_is_not_sent_twice(app_module, tmp_path):
+    """The try-again above must never send a meeting twice: once a POST has
+    gone out, a cut answer is left for the next sync to sort out."""
+    import socket
+    import threading
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(4)
+    srv.settimeout(5)
+    seen = []
+
+    def serve():
+        try:
+            while True:
+                conn, _ = srv.accept()
+                conn.recv(65536)
+                seen.append(1)
+                conn.close()          # took the upload, hung up without answering
+        except OSError:
+            pass
+    threading.Thread(target=serve, daemon=True).start()
+
+    (tmp_path / "recorder").mkdir()
+    (tmp_path / "linked-server.json").write_text(
+        json.dumps({"url": "https://far.test", "api_key": "nwd_not-real"}))
+    lk = linked_server.Link(tmp_path, app_module.storage, OWNER)
+    lk.url = "http://127.0.0.1:%d" % srv.getsockname()[1]
+    with pytest.raises(Exception):
+        lk._send("POST", "/upload", json={"note": "x"})
+    srv.close()
+    assert seen == [1]
