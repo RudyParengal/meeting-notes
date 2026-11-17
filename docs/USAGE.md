@@ -35,6 +35,21 @@ If the recorder hears silence for 10 seconds it warns you — usually the wrong 
 
 ---
 
+## Dictation (Windows app)
+
+1. Click where the text should go — any program.
+2. Hold **Ctrl+Win** and speak. A small "listening" badge shows at the bottom of the screen.
+3. Let go. The text appears at the cursor, usually within a second.
+
+- **Wrong window?** Press **Alt+Shift+V** to paste the last dictation again.
+- **Password boxes and password managers are never typed into.** The text goes to the history instead.
+- **Offline.** Speech becomes text on your computer. The optional tidy-up (off by default) is the only part that uses the internet, and only with AI services that do not train on what you send.
+- **During a meeting recording** dictation still works; the recording keeps its sound.
+
+Everything else is in **Settings → Dictation**: switch it off, change the keys, the speech model and language, your word list (the right spelling and what it tends to be heard as), and **Dictation history**.
+
+---
+
 ## The dashboard
 
 Open `http://127.0.0.1:8766` (or your server's address) and log in.

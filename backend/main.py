@@ -5,6 +5,7 @@
     GET  /sessions          list (yours, or everyone's if you are admin)
     GET  /settings/ai       which AI writes the notes (admin can change it)
     GET  /recorder          the built-in recorder, desktop app only
+    GET  /dictation         hold-to-talk dictation, word list, history; desktop app only
     GET  /                  the dashboard
 
 Authentication is ALWAYS required, with no "trusted network" switch. Either:
@@ -748,6 +749,88 @@ async def recorder_devices(admin: dict = Depends(admin_only)):
 def recorder_settings(req: RecorderSettings, admin: dict = Depends(admin_only)):
     _recorder()
     return {"settings": recorder_bridge.update(req.model_dump(exclude_none=True))}
+
+
+# ------------------------------------------- dictation (desktop app only) ---
+def _dictation():
+    svc = recorder_bridge.dictation()
+    if svc is None:
+        raise HTTPException(501, "Dictation is part of the Notewell desktop app.")
+    return svc
+
+
+class DictationSettings(BaseModel):
+    enabled: Optional[bool] = None
+    hotkey: Optional[str] = Field(None, max_length=60)
+    repaste_hotkey: Optional[str] = Field(None, max_length=60)
+    model: Optional[str] = Field(None, max_length=20)
+    language: Optional[str] = Field(None, max_length=10)
+    tidy: Optional[bool] = None
+
+
+class DictationWord(BaseModel):
+    term: Optional[str] = Field(None, max_length=200)
+    mishearing: Optional[str] = Field(None, max_length=600)
+
+
+def _dictation_view(svc) -> dict:
+    return {**svc.status(), "words": svc.store.words()}
+
+
+@app.get("/dictation")
+def dictation_status(admin: dict = Depends(admin_only)):
+    return _dictation_view(_dictation())
+
+
+@app.put("/dictation/settings")
+async def dictation_settings(req: DictationSettings, admin: dict = Depends(admin_only)):
+    svc = _dictation()
+    try:          # switching on can take a moment: it waits for the keyboard hook
+        await asyncio.to_thread(svc.update, req.model_dump(exclude_none=True))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return _dictation_view(svc)
+
+
+@app.post("/dictation/words")
+def dictation_add_word(req: DictationWord, admin: dict = Depends(admin_only)):
+    svc = _dictation()
+    try:
+        return svc.store.add_word(req.term or "", req.mishearing or "")
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.put("/dictation/words/{word_id}")
+def dictation_change_word(req: DictationWord, word_id: int = PathParam(..., ge=1),
+                          admin: dict = Depends(admin_only)):
+    svc = _dictation()
+    try:
+        return svc.store.update_word(word_id, req.term, req.mishearing)
+    except KeyError:
+        raise HTTPException(404, "That word is no longer in the list")
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.delete("/dictation/words/{word_id}")
+def dictation_delete_word(word_id: int = PathParam(..., ge=1), admin: dict = Depends(admin_only)):
+    if not _dictation().store.delete_word(word_id):
+        raise HTTPException(404, "That word is no longer in the list")
+    return {"ok": True}
+
+
+@app.get("/dictation/history")
+def dictation_history(limit: int = Query(100, ge=1, le=500), before: Optional[float] = None,
+                      admin: dict = Depends(admin_only)):
+    return {"items": _dictation().store.history(limit, before)}
+
+
+@app.delete("/dictation/history")
+def dictation_clear_history(admin: dict = Depends(admin_only)):
+    n = _dictation().store.clear_history()
+    log.info("dictation history cleared by %s (%d)", admin["email"], n)
+    return {"cleared": n}
 
 
 # ------------------------------------------------------------- dashboard ---

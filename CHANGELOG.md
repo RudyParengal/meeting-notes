@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.3.0 — Dictation (2026-11-17)
+
+### New
+- **Talk instead of type, anywhere in Windows.** Hold **Ctrl+Win**, speak, let go: the words appear where your cursor is — in Notepad, a browser, an email. Measured on a laptop: the text arrives about half a second after you let go (0.5 s in Notepad, 0.6 s in a browser text box).
+- **It stays on your computer.** The speech is turned into text on the laptop itself, with the small "base" speech model. Nothing is sent anywhere.
+- **Paste the last one again** with **Alt+Shift+V** — handy when the text went to the wrong window.
+- **Your own word list.** Add the right spelling of a name or term, and what it tends to be heard as; Notewell swaps it in and counts how often it helped. Edit it in **Settings → Dictation**.
+- **A history of what you said**, kept in Notewell's data folder and shown in Settings.
+- **An optional tidy-up** (removes "um", fixes punctuation). **Off unless you turn it on.** It only ever uses AI services that do not train on what you send; when it is off, dictation works with no internet at all.
+
+### Security
+- **It never types into a password box or a password manager.** The text is kept in the history instead.
+- **The small "listening" badge is hidden from screen shares and recordings**, so the people on your call do not see it.
+
+### Good to know
+- What was on your clipboard before is put back afterwards.
+- Dictation does not interrupt a meeting recording: both can use the microphone at the same time.
+- Change the keys, or switch dictation off completely, in **Settings → Dictation**.
+
 ## 2.2.1 — A forgotten recording stops by itself (2026-11-16)
 
 ### Fixed

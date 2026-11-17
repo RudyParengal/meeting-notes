@@ -26,6 +26,19 @@ def available() -> bool:
     return _controller is not None
 
 
+# Hold-to-talk dictation (windows-recorder/dictation.py), desktop app only.
+_dictation = None
+
+
+def attach_dictation(service) -> None:
+    global _dictation
+    _dictation = service
+
+
+def dictation():
+    return _dictation
+
+
 # Settings the dashboard may change. Everything else in the recorder's config
 # stays file-only, on purpose: those are tuning values, not choices.
 EDITABLE = {"audio_source": str, "language": str, "auto_detect": bool,

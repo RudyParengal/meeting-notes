@@ -844,8 +844,148 @@ function renderSettings() {
   if (!isAdmin()) { page.appendChild(h('div', { class: 'card' }, 'Only the administrator can change settings.')); main.appendChild(page); return; }
   page.appendChild(aiCard());
   if (rec) page.appendChild(recordingCard());
+  if (rec) page.appendChild(h('div', { id: 'dictation-cards' }));
   if (!rec) page.appendChild(peopleCard());
   main.appendChild(page);
+  if (rec) loadDictation();
+}
+
+// --- dictation (desktop app only) ----------------------------------------------------------
+
+var dict = null;        // GET /dictation
+
+async function loadDictation() {
+  var box = $('dictation-cards');
+  if (!box) return;
+  try { var r = await api('/dictation'); dict = r.ok ? await r.json() : null; } catch (e) { dict = null; }
+  box.innerHTML = '';
+  if (!dict) return;
+  box.appendChild(dictationCard());
+  box.appendChild(wordsCard());
+  box.appendChild(historyCard());
+}
+
+async function saveDictation(changes) {
+  var r = await api('/dictation/settings', { method: 'PUT', json: changes });
+  if (!r.ok) { toast('Not saved: ' + await errorText(r)); await loadDictation(); return; }
+  await loadDictation();
+  toast('Saved');
+}
+
+function prettyKeys(k) {
+  return (k || '').split('+').map(function(p) { return p === 'win' ? 'Windows key' : p.charAt(0).toUpperCase() + p.slice(1); }).join(' + ');
+}
+
+function dictationCard() {
+  var d = dict;
+  var on = h('input', { type: 'checkbox', checked: d.enabled, onchange: function() { saveDictation({ enabled: on.checked }); } });
+  var hot = h('input', { type: 'text', value: d.hotkey, placeholder: 'ctrl+win' });
+  var rep = h('input', { type: 'text', value: d.repaste_hotkey, placeholder: 'alt+shift+v (empty = off)' });
+  var model = h('select', { onchange: function() { saveDictation({ model: model.value }); } },
+    [['base', 'Base: fastest (recommended)'], ['small', 'Small: more accurate, about 2 s slower']]
+      .filter(function(m) { return d.models.indexOf(m[0]) >= 0; })
+      .map(function(m) { return h('option', { value: m[0] }, m[1]); }));
+  model.value = d.model;
+  var lang = h('select', { onchange: function() { saveDictation({ language: lang.value }); } },
+    LANGUAGES.map(function(l) { return h('option', { value: l[0] }, l[1]); }));
+  lang.value = d.language || '';
+  var tidy = h('input', { type: 'checkbox', checked: d.tidy, onchange: function() { saveDictation({ tidy: tidy.checked }); } });
+  var tidyNote, aiName = d.tidy_ai ? (ai ? presetName(d.tidy_ai.provider) : d.tidy_ai.provider) : '';
+  if (!d.tidy_ai) tidyNote = 'No AI is set up above, so tidy-up only removes filler words, on this computer.';
+  else if (d.tidy_ai.allowed) tidyNote = 'Sends the text to ' + aiName + ', which does not train on it. Without a connection the text is pasted as spoken.';
+  else tidyNote = 'The AI chosen above (' + aiName + ') may keep or learn from what it is sent, so dictation never sends it anything. Tidy-up only removes filler words, on this computer.';
+  var lastSecs = d.last ? (d.last.delay_ms / 1000).toFixed(1) + ' s after you let go' : '';
+  var lastHow = !d.last ? '' : d.last.outcome === 'held' ? 'ready ' + lastSecs + ', not typed because the cursor was in a password box'
+    : d.last.outcome === 'failed' ? 'ready ' + lastSecs + ', but typing it failed; it is in the history below' : 'typed ' + lastSecs;
+  var last = d.last ? h('p', { class: 'hint' }, 'Last dictation: ' + d.last.words + ' words, ' + lastHow + '.') : null;
+  var t = d.totals || {};
+  return h('div', { class: 'card' },
+    h('h2', {}, 'Dictation'),
+    h('p', { class: 'hint' }, 'Hold ', h('b', {}, prettyKeys(d.hotkey)), ' anywhere in Windows, speak, and let go: the words are typed where your cursor is. Speech is turned into text on this computer. Never types into password boxes, and does not disturb a meeting being recorded.'),
+    d.last_error ? h('div', { class: 'banner warn', style: 'margin:10px 0' }, d.last_error) : null,
+    !d.model_ready && d.enabled ? h('div', { class: 'banner info', style: 'margin:10px 0' }, h('span', { class: 'spinner' }), 'Getting the speech model ready…') : null,
+    h('label', { class: 'switch' }, on, h('span', {}, h('b', {}, 'Dictation on'),
+      h('div', { class: 'hint' }, 'Switch off to stop Notewell listening for the shortcut at all.'))),
+    h('div', { class: 'two', style: 'margin-top:12px' },
+      h('label', { class: 'field' }, h('span', {}, 'Hold to talk'), hot),
+      h('label', { class: 'field' }, h('span', {}, 'Paste the last one again'), rep)),
+    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: function() {
+      saveDictation({ hotkey: hot.value.trim(), repaste_hotkey: rep.value.trim() }); } }, 'Save shortcuts')),
+    h('p', { class: 'hint' }, 'Type keys joined by +, for example ctrl+win, ctrl+alt+space or rctrl.'),
+    h('div', { class: 'two', style: 'margin-top:12px' },
+      h('label', { class: 'field' }, h('span', {}, 'Accuracy'), model),
+      h('label', { class: 'field' }, h('span', {}, 'Language'), lang)),
+    h('label', { class: 'switch' }, tidy, h('span', {}, h('b', {}, 'Tidy up the text'),
+      h('div', { class: 'hint' }, 'Removes “um”s and, with an AI, fixes punctuation. ' + tidyNote))),
+    last,
+    h('p', { class: 'hint' }, (t.dictations || 0) + ' dictations, ' + (t.words || 0) + ' words so far.'));
+}
+
+function wordsCard() {
+  var card = h('div', { class: 'card' }, h('h2', {}, 'Your words'),
+    h('p', { class: 'hint' }, 'Names and terms dictation should always spell your way. Add what it mishears them as, separated by commas, and it fixes that too.'));
+  var table = h('table', { class: 'users' },
+    h('tr', {}, h('th', {}, 'Word'), h('th', {}, 'Misheard as'), h('th', {}, 'Used'), h('th', {})));
+  dict.words.forEach(function(w) {
+    var term = h('input', { type: 'text', value: w.term });
+    var mis = h('input', { type: 'text', value: w.mishearing, placeholder: '—' });
+    table.appendChild(h('tr', {},
+      h('td', {}, term), h('td', {}, mis), h('td', {}, String(w.use_count)),
+      h('td', { style: 'white-space:nowrap' },
+        h('button', { class: 'btn small', onclick: async function() {
+          var r = await api('/dictation/words/' + w.id, { method: 'PUT', json: { term: term.value, mishearing: mis.value } });
+          if (!r.ok) { toast('Not saved: ' + await errorText(r)); return; }
+          await loadDictation(); toast('Saved'); } }, 'Save'),
+        ' ',
+        h('button', { class: 'btn small danger', onclick: async function() {
+          var r = await api('/dictation/words/' + w.id, { method: 'DELETE' });
+          if (!r.ok) { toast('Not removed: ' + await errorText(r)); return; }
+          await loadDictation(); toast('Removed'); } }, 'Remove'))));
+  });
+  var nt = h('input', { type: 'text', placeholder: 'e.g. Kubernetes' });
+  var nm = h('input', { type: 'text', placeholder: 'e.g. paren gal, para angel' });
+  table.appendChild(h('tr', {}, h('td', {}, nt), h('td', {}, nm), h('td', {}),
+    h('td', {}, h('button', { class: 'btn small primary', onclick: async function() {
+      var r = await api('/dictation/words', { method: 'POST', json: { term: nt.value, mishearing: nm.value } });
+      if (!r.ok) { toast('Not added: ' + await errorText(r)); return; }
+      await loadDictation(); toast('Added'); } }, 'Add'))));
+  card.appendChild(table);
+  return card;
+}
+
+function historyCard() {
+  var list = h('div', {}, h('p', { class: 'dim' }, 'Loading…'));
+  var card = h('div', { class: 'card' }, h('h2', {}, 'Dictation history'),
+    h('p', { class: 'hint' }, 'Kept on this computer only. ', h('b', {}, prettyKeys(dict.repaste_hotkey) || 'The repaste shortcut'), ' types the latest one again.'),
+    list);
+  var oldest = null;
+  var more = h('button', { class: 'btn small', style: 'display:none', onclick: function() { page(); } }, 'Show older');
+  var clear = h('button', { class: 'btn small danger', onclick: async function() {
+    if (!confirm('Delete all dictation history? This cannot be undone. Your word list stays.')) return;
+    var r = await api('/dictation/history', { method: 'DELETE' });
+    if (!r.ok) { toast('Not cleared: ' + await errorText(r)); return; }
+    var d = await r.json();
+    toast('Deleted ' + d.cleared + ' dictations');
+    await loadDictation(); } }, 'Delete all history');
+  card.appendChild(h('div', { class: 'row', style: 'margin-top:10px' }, more, clear));
+  var first = true;
+  async function page() {
+    var r = await api('/dictation/history?limit=50' + (oldest != null ? '&before=' + oldest : ''));
+    var items = r.ok ? (await r.json()).items : [];
+    if (first) { list.innerHTML = ''; first = false; }
+    if (!items.length && !list.children.length) list.appendChild(h('p', { class: 'dim' }, 'Nothing dictated yet.'));
+    items.forEach(function(it) {
+      var when = new Date(it.created_at * 1000);
+      list.appendChild(h('div', { style: 'padding:8px 0;border-bottom:1px solid var(--border)' },
+        h('div', { class: 'hint' }, when.toLocaleDateString() + ' ' + timeOf(when) + (it.app ? ' · ' + it.app : '') +
+          ({ held: ' · not typed: password box', failed: ' · could not be typed' }[it.outcome] || '')),
+        h('div', { style: 'user-select:text' }, it.text || '(nothing heard)')));
+      oldest = it.created_at;
+    });
+    more.style.display = items.length === 50 ? '' : 'none';
+  }
+  page();
+  return card;
 }
 
 function aiCard() {

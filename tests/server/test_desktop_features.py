@@ -230,3 +230,73 @@ def test_the_dashboard_can_drive_an_attached_recorder(client, admin, app_module,
     assert client.post("/recorder/stop", headers=admin).json()["recording"] is False
     alice = {"X-API-Key": make_user(client, admin)["api_key"]}
     assert client.post("/recorder/start", headers=alice).status_code == 403
+
+
+# ---------------------------------------------------------- dictation ---
+class FakeDictation:
+    """Stands in for windows-recorder/dictation.py; the word list and history are real."""
+    def __init__(self, store):
+        self.store, self.cfg = store, {"hotkey": "ctrl+win", "tidy": False}
+
+    def status(self):
+        return {"enabled": True, "hotkey": self.cfg["hotkey"], "tidy": self.cfg["tidy"]}
+
+    def update(self, changes):
+        if "hotkey" in changes and "+" not in changes["hotkey"]:
+            raise ValueError("Choose at least two keys, for example Ctrl+Win")
+        self.cfg.update(changes)
+        return self.status()
+
+
+def test_a_server_has_no_dictation(client, admin):
+    assert client.get("/dictation", headers=admin).status_code == 501
+
+
+def test_the_dashboard_manages_dictation(client, admin, app_module, monkeypatch, tmp_path):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "windows-recorder"))
+    from dictation_store import Store
+    store = Store(tmp_path / "dictation.db")
+    monkeypatch.setattr(app_module.recorder_bridge, "_dictation", None)
+    app_module.recorder_bridge.attach_dictation(FakeDictation(store))
+
+    got = client.put("/dictation/settings", headers=admin, json={"hotkey": "alt+shift+d", "tidy": True}).json()
+    assert got["hotkey"] == "alt+shift+d" and got["tidy"] is True and got["words"] == []
+    bad = client.put("/dictation/settings", headers=admin, json={"hotkey": "d"})
+    assert bad.status_code == 422 and "two keys" in bad.json()["detail"]
+
+    w = client.post("/dictation/words", headers=admin, json={"term": "Notewell", "mishearing": "note well"}).json()
+    assert client.post("/dictation/words", headers=admin, json={"term": "notewell"}).status_code == 422
+    changed = client.put(f"/dictation/words/{w['id']}", headers=admin, json={"mishearing": "no tell"}).json()
+    assert changed["term"] == "Notewell" and changed["mishearing"] == "no tell"
+    assert client.get("/dictation", headers=admin).json()["words"][0]["term"] == "Notewell"
+    assert client.delete(f"/dictation/words/{w['id']}", headers=admin).json() == {"ok": True}
+    assert client.delete(f"/dictation/words/{w['id']}", headers=admin).status_code == 404
+    assert client.put("/dictation/words/999", headers=admin, json={"term": "x"}).status_code == 404
+
+    store.add_dictation("first", "first", app="notepad.exe", seconds=1.5)
+    store.add_dictation("second", "second", outcome="held")
+    items = client.get("/dictation/history?limit=1", headers=admin).json()["items"]
+    assert [i["text"] for i in items] == ["second"] and items[0]["outcome"] == "held"
+    older = client.get(f"/dictation/history?before={items[0]['created_at']}", headers=admin).json()["items"]
+    assert "second" not in [i["text"] for i in older]
+    assert client.delete("/dictation/history", headers=admin).json() == {"cleared": 2}
+
+    alice = {"X-API-Key": make_user(client, admin)["api_key"]}       # dictation is the owner's alone
+    assert client.get("/dictation", headers=alice).status_code == 403
+    assert client.get("/dictation/history", headers=alice).status_code == 403
+
+
+def test_a_test_copy_with_its_own_folder_runs_beside_the_installed_one(monkeypatch, tmp_path):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "desktop"))
+    import notewell
+    monkeypatch.delenv("NOTEWELL_HOME", raising=False)
+    assert notewell.instance_name("Local\\Notewell") == "Local\\Notewell"     # the installed app: unchanged
+    monkeypatch.setenv("NOTEWELL_HOME", str(tmp_path))
+    monkeypatch.setattr(notewell, "HOME", tmp_path)
+    one = notewell.instance_name("Local\\Notewell")
+    monkeypatch.setattr(notewell, "HOME", tmp_path / "other")
+    assert one.startswith("Local\\Notewell.") and notewell.instance_name("Local\\Notewell") != one

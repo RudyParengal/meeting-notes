@@ -28,6 +28,8 @@ HOME = Path(os.environ.get("NOTEWELL_HOME") or (Path.home() / "Notewell"))
 ICON = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])) / "desktop" / "notewell.ico"
 # Per user, so two people signed in to one PC never reach each other's window.
 PIPE = "Notewell.Window." + hashlib.sha256(getpass.getuser().encode()).hexdigest()[:12]
+if os.environ.get("NOTEWELL_HOME"):    # a copy with its own data folder has its own window
+    PIPE += "." + hashlib.sha256(str(HOME.resolve()).lower().encode()).hexdigest()[:12]
 
 
 def is_own(url: QUrl) -> bool:

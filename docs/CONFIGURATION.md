@@ -142,6 +142,13 @@ The installer writes this file. After editing, right-click the tray icon → **Q
 | `auto_stop_silence_minutes` | `15` | Stop a forgotten recording after this many minutes with no sound; `0` = never |
 | `archive_backups` | `true` | After a note is safely stored, move the backup audio to `%USERPROFILE%\MeetingArchive` |
 | `archive_retention_days` | `30` | Archived audio older than this is cleared automatically |
+| `dictation_enabled` | `true` | Hold-to-talk dictation in the Windows app. `false` = the keys do nothing and the microphone is never opened for it |
+| `dictation_hotkey` | `ctrl+win` | Hold to talk, let go to type |
+| `dictation_repaste_hotkey` | `alt+shift+v` | Paste the last dictation again |
+| `dictation_model` | `base` | Speech model for dictation (`tiny` is quicker, `small` more accurate) |
+| `dictation_language` | `en` | Language spoken |
+| `dictation_tidy` | `false` | Tidy the text with an AI service. Only services that do not train on your text are accepted |
+| `dictation_threads` | `4` | Processor threads used for dictation |
 
 Everything not listed keeps a safe default. Unknown settings are ignored, and a damaged file is never overwritten — the recorder says what is wrong and waits.
 

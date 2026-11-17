@@ -48,12 +48,21 @@ _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True) if os.name == "nt" el
 _mutex = None
 
 
+def instance_name(base: str) -> str:
+    """One Notewell per Windows user and data folder. A copy given its own folder
+    with NOTEWELL_HOME (a test copy) runs beside the installed one."""
+    if not os.environ.get("NOTEWELL_HOME"):
+        return base
+    import hashlib
+    return base + "." + hashlib.sha256(str(HOME.resolve()).lower().encode()).hexdigest()[:12]
+
+
 def already_running() -> bool:
     """One Notewell per Windows user. The handle is held until the process ends."""
     global _mutex
     if not _kernel32:
         return False
-    _mutex = _kernel32.CreateMutexW(None, False, "Local\\Notewell")
+    _mutex = _kernel32.CreateMutexW(None, False, instance_name("Local\\Notewell"))
     return ctypes.get_last_error() == 183          # ERROR_ALREADY_EXISTS
 
 
@@ -220,9 +229,24 @@ def run() -> None:
     def open_dashboard():
         open_window(f"http://127.0.0.1:{port}/#token={server.tokens.issue(ADMIN)}")
 
+    def start_dictation(ctl):
+        """Hold-to-talk dictation (windows-recorder/dictation.py). A fault here must
+        never stop meetings being recorded, so it is caught and logged."""
+        try:
+            import dictation, dictation_store, settings_store
+            svc = dictation.DictationService(
+                ctl["cfg"], ctl["save_cfg"], dictation_store.Store(HOME / "data" / "dictation.db"),
+                get_ai=settings_store.ai, models_dir=HOME / "recorder" / "models")
+            held["dictation"] = svc
+            recorder_bridge.attach_dictation(svc)
+            svc.start()
+        except Exception:
+            logging.getLogger("dictation").exception("dictation could not start")
+
     def on_ready(ctl):
         held["manager"] = ctl["manager"]
         recorder_bridge.attach(**ctl)
+        start_dictation(ctl)
         # Imported audio files use the recorder's model: one copy in memory, one download.
         server._get_whisper = lambda: recorder.get_whisper(ctl["cfg"])
         threading.Thread(target=warm_up, args=(ctl,), daemon=True).start()
@@ -238,6 +262,8 @@ def run() -> None:
 
     # Quit was chosen. A meeting that was just stopped is still being transcribed
     # and sent to the server: finish that before the process ends.
+    if held.get("dictation"):
+        held["dictation"].stop()
     mgr = held.get("manager")
     while mgr is not None and mgr.processing:
         time.sleep(1)
