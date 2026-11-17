@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4.0 — Sign in to your notes server; dictation follows your account (2026-11-17)
+
+### Added
+- **Settings → Your account.** Sign in once with your email and password; this PC gets its own pass, which the server keeps scrambled and can switch off on its own. Your password is not kept on the PC. The old settings file is kept as a backup.
+- **Your dictation words and history follow your account.** Words you add or remove, and what you dictate, reach your other signed-in devices. A server without accounts is skipped quietly.
+
 ## 2.3.2 — Dictation shows when it is really listening (2026-11-17)
 
 ### Fixed
