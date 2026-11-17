@@ -247,7 +247,10 @@ class FakeModel:
 
 class FakeMic:
     def __init__(self, audio):
-        self.audio, self.started = audio, 0
+        self.audio, self.started, self.warmed = audio, 0, 0
+
+    def warm(self):
+        self.warmed += 1
 
     def start(self):
         self.started += 1
@@ -380,6 +383,56 @@ def t_keys_drive_the_mic():
     assert svc.state == "ready" and svc._jobs.qsize() == 0 and svc.desktop.hidden == 1
     svc.on_hotkey("repaste", "start")
     assert svc._jobs.qsize() == 1
+
+
+def t_mic_warmed_at_start_up():
+    # The first time a program opens this laptop's microphone takes 4-7 s; later opens
+    # take about 0.5 s. Without a warm-up the first dictation loses its first words.
+    opened = []
+
+    class Rec:
+        def __enter__(self):
+            opened.append("open"); return self
+
+        def __exit__(self, *a):
+            opened.append("close")
+
+        def record(self, numframes):
+            opened.append("read"); return np.zeros((numframes, 1), np.float32)
+
+    class FakeSoundcard:
+        @staticmethod
+        def default_microphone():
+            class M:
+                def recorder(self, samplerate, channels):
+                    return Rec()
+            return M()
+
+    real = sys.modules.get("soundcard")
+    sys.modules["soundcard"] = FakeSoundcard
+    try:
+        D.Mic().warm()
+    finally:
+        if real is None:
+            sys.modules.pop("soundcard", None)
+        else:
+            sys.modules["soundcard"] = real
+    assert opened == ["open", "read", "close"], opened
+    svc = service()
+    svc._warm()
+    assert svc.mic.warmed == 1, "dictation must warm the microphone when it switches on"
+
+
+def t_mic_warm_failure_harmless():
+    svc = service()
+    tried = []
+    def boom():
+        tried.append(1)
+        raise OSError("no microphone")
+    svc.mic.warm = boom
+    svc._warm()                                           # must not raise
+    assert tried == [1], "the warm-up was not tried"
+    assert not svc.last_error, "a warm-up failure must not show as a dictation fault"
 
 
 def t_update_checks_everything_first():
@@ -556,6 +609,8 @@ check("AI tidy-up failing still types the text", t_tidy_ai_failure_keeps_text)
 check("a paste that fails is recorded as failed", t_failed_paste_recorded)
 check("paste the last one again", t_repaste)
 check("the keys open and close the microphone", t_keys_drive_the_mic)
+check("the microphone is opened once at start-up so the first words are kept", t_mic_warmed_at_start_up)
+check("a microphone that cannot be warmed does not stop dictation", t_mic_warm_failure_harmless)
 check("settings: every change is checked before anything is saved", t_update_checks_everything_first)
 check("switching dictation off in Settings stops it at once", t_switch_off_while_running)
 check("status says whether the chosen AI may be used", t_status)

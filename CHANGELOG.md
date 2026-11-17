@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.1 — The first dictation keeps its first words (2026-11-17)
+
+### Fixed
+- **The first dictation after Notewell starts no longer loses its opening words.** On some laptops Windows takes 4 to 7 seconds to open the microphone the first time a program asks for it, and well under a second after that. Notewell now opens the microphone once, briefly, when dictation switches on, so every dictation starts listening straight away.
+
+### Good to know
+- You will see the Windows microphone icon for a few seconds when Notewell starts. That is this warm-up; nothing is recorded or kept.
+
 ## 2.3.0 — Dictation (2026-11-17)
 
 ### New

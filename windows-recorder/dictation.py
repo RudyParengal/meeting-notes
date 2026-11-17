@@ -318,6 +318,14 @@ class Mic:
         self._thread = None
         self.opened_after = None     # seconds from start() to the first sound arriving
 
+    def warm(self):
+        """Open the microphone once and close it again. The first open in a program
+        takes 4-7 s on this laptop's microphone; every later one under 1 s (measured
+        up to 5 minutes idle). Done at start-up so the first dictation keeps its words."""
+        import soundcard as sc
+        with sc.default_microphone().recorder(samplerate=SR, channels=1) as rec:
+            rec.record(numframes=SR // 20)
+
     def start(self):
         self._stop.clear()
         self._chunks = []
@@ -358,6 +366,9 @@ class WavMic:
             raw = w.readframes(w.getnframes())
             self.audio = np.frombuffer(raw, np.int16).astype(np.float32) / 32768
         self.opened_after = 0.0
+
+    def warm(self):
+        pass
 
     def start(self):
         pass
@@ -427,6 +438,13 @@ class DictationService:
         except Exception as e:
             self.last_error = f"the speech model could not be loaded ({type(e).__name__})"
             log.exception("dictation model failed to load")
+        try:
+            t0 = time.perf_counter()
+            self.mic.warm()
+            log.info("Dictation microphone ready (first open took %.1fs)", time.perf_counter() - t0)
+        except Exception:
+            log.warning("dictation: the microphone could not be opened in advance; "
+                        "the first dictation may miss its first words", exc_info=True)
 
     def stop(self):
         """Notewell is closing."""
