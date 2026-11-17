@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.3.2 — Dictation shows when it is really listening (2026-11-17)
+
+### Fixed
+- **Notewell no longer opens the microphone when it starts.** 2.3.1 did this to make the first dictation quicker; on some laptops it froze the built-in microphone until it recovered by itself a few minutes later. That warm-up is gone.
+
+### Changed
+- **The bubble says "Wait, mic starting..." until sound is really coming in, then "Listening".** Windows can take 4 to 7 seconds to start a microphone that has been idle; start speaking when the bubble turns to "Listening" and nothing is lost.
+- The log now says how long the microphone took to start for each dictation.
+
 ## 2.3.1 — The first dictation keeps its first words (2026-11-17)
 
 ### Fixed

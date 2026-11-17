@@ -318,15 +318,9 @@ class Mic:
         self._thread = None
         self.opened_after = None     # seconds from start() to the first sound arriving
 
-    def warm(self):
-        """Open the microphone once and close it again. The first open in a program
-        takes 4-7 s on this laptop's microphone; every later one under 1 s (measured
-        up to 5 minutes idle). Done at start-up so the first dictation keeps its words."""
-        import soundcard as sc
-        with sc.default_microphone().recorder(samplerate=SR, channels=1) as rec:
-            rec.record(numframes=SR // 20)
-
-    def start(self):
+    def start(self, on_live=None):
+        """on_live() is called once, when the first sound arrives. Windows can take
+        4-7 s to open this laptop's microphone; until then nothing is being heard."""
         self._stop.clear()
         self._chunks = []
         self.opened_after = None
@@ -340,6 +334,8 @@ class Mic:
                         data = rec.record(numframes=SR // 20)
                         if self.opened_after is None:
                             self.opened_after = time.perf_counter() - t0
+                            if on_live:
+                                on_live()
                         self._chunks.append(data.reshape(-1).astype(np.float32))
                         if sum(len(c) for c in self._chunks) > SR * MAX_SECONDS:
                             break
@@ -367,11 +363,9 @@ class WavMic:
             self.audio = np.frombuffer(raw, np.int16).astype(np.float32) / 32768
         self.opened_after = 0.0
 
-    def warm(self):
-        pass
-
-    def start(self):
-        pass
+    def start(self, on_live=None):
+        if on_live:
+            on_live()
 
     def stop(self):
         return self.audio
@@ -403,6 +397,9 @@ class DictationService:
         self._jobs = queue.Queue()
         self._worker = None
         self._t_start = 0.0
+        self._lock = threading.Lock()   # the microphone thread and the keys both change the bubble
+        self._press = 0                 # counts key presses, so a late "mic is live" is ignored
+        self._mic_wait = None           # seconds the microphone took to start, last dictation
 
     # ---- start / stop ----
     def start(self):
@@ -438,13 +435,6 @@ class DictationService:
         except Exception as e:
             self.last_error = f"the speech model could not be loaded ({type(e).__name__})"
             log.exception("dictation model failed to load")
-        try:
-            t0 = time.perf_counter()
-            self.mic.warm()
-            log.info("Dictation microphone ready (first open took %.1fs)", time.perf_counter() - t0)
-        except Exception:
-            log.warning("dictation: the microphone could not be opened in advance; "
-                        "the first dictation may miss its first words", exc_info=True)
 
     def stop(self):
         """Notewell is closing."""
@@ -541,14 +531,20 @@ class DictationService:
             if self.state == "listening":
                 return
             self._t_start = time.perf_counter()
-            self.state = "listening"
-            self.mic.start()
+            with self._lock:
+                self._press += 1
+                press = self._press
+                self.state = "listening"
+                self.desktop.show("waiting")   # "Listening" only once sound really arrives
             self.desktop.send_mask_key()       # stop Win (or Alt) on its own opening Start
-            self.desktop.show("listening")
+            self.mic.start(on_live=lambda: self._mic_live(press))
         elif name == "dictate" and action in ("stop", "cancel"):
             if self.state != "listening":
                 return
+            with self._lock:
+                self._press += 1               # a "mic is live" arriving after this is too late
             audio = self.mic.stop()
+            self._mic_wait = getattr(self.mic, "opened_after", None)
             if action == "cancel":
                 self.state = "ready"
                 self.desktop.hide()
@@ -560,6 +556,11 @@ class DictationService:
         elif name == "repaste" and action == "start":
             self.desktop.send_mask_key()
             self._jobs.put(("repaste", None, time.perf_counter()))
+
+    def _mic_live(self, press):
+        with self._lock:
+            if press == self._press and self.state == "listening":
+                self.desktop.show("listening")
 
     def _work(self):
         while True:
@@ -609,8 +610,10 @@ class DictationService:
         self.store.count_uses(used)
         self.last = {"id": row, "words": len(text.split()), "delay_ms": delay_ms, "app": app,
                      "outcome": outcome, "at": time.time()}
+        wait = self._mic_wait
         log.info("dictation: %d words, %.1f s of speech, ready %d ms after the key was let go, "
-                 "in %s (%s)", len(text.split()), seconds, delay_ms, app or "?", outcome)
+                 "in %s (%s); microphone took %s to start", len(text.split()), seconds, delay_ms,
+                 app or "?", outcome, f"{wait:.1f} s" if wait is not None else "?")
         return row
 
     def deliver(self, text):
@@ -936,7 +939,8 @@ if os.name == "nt":
         the focus, clicks pass through it, and it is left out of screen shares and
         screenshots. Lives on the keyboard thread, which runs its message loop."""
         W_, H_ = 230, 40
-        STYLES = {"listening": ("Listening", 0x3C3CE8), "writing": ("Writing...", 0x2BA6F5)}
+        STYLES = {"waiting": ("Wait, mic starting...", 0x9A9A9A), "listening": ("Listening", 0x3C3CE8),
+                  "writing": ("Writing...", 0x2BA6F5)}
         # Windows keeps the window type for the life of the program, so it is registered
         # once, with one callback that finds the bubble it is for (dictation can be
         # switched off and on again, which makes a new bubble).

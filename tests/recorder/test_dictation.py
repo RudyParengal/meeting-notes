@@ -247,13 +247,11 @@ class FakeModel:
 
 class FakeMic:
     def __init__(self, audio):
-        self.audio, self.started, self.warmed = audio, 0, 0
+        self.audio, self.started, self.on_live = audio, 0, None
 
-    def warm(self):
-        self.warmed += 1
-
-    def start(self):
+    def start(self, on_live=None):
         self.started += 1
+        self.on_live = on_live
 
     def stop(self):
         return self.audio
@@ -371,7 +369,9 @@ def t_repaste():
 def t_keys_drive_the_mic():
     svc = service()
     svc.on_hotkey("dictate", "start")
-    assert svc.state == "listening" and svc.mic.started == 1 and svc.desktop.shown == ["listening"]
+    assert svc.state == "listening" and svc.mic.started == 1 and svc.desktop.shown == ["waiting"]
+    svc.mic.on_live()                                      # the first sound arrives
+    assert svc.desktop.shown == ["waiting", "listening"]
     assert svc.desktop.masks == 1, "Win on its own must not open the Start menu"
     svc.on_hotkey("dictate", "start")                      # repeated: ignored
     assert svc.mic.started == 1
@@ -385,54 +385,78 @@ def t_keys_drive_the_mic():
     assert svc._jobs.qsize() == 1
 
 
-def t_mic_warmed_at_start_up():
-    # The first time a program opens this laptop's microphone takes 4-7 s; later opens
-    # take about 0.5 s. Without a warm-up the first dictation loses its first words.
-    opened = []
+class _FakeSoundcard:
+    """Stands in for the soundcard library; records every microphone open."""
+    def __init__(self):
+        self.opened = []
+        sc = self
 
-    class Rec:
-        def __enter__(self):
-            opened.append("open"); return self
+        class Rec:
+            def __enter__(self):
+                sc.opened.append("open"); return self
 
-        def __exit__(self, *a):
-            opened.append("close")
+            def __exit__(self, *a):
+                sc.opened.append("close")
 
-        def record(self, numframes):
-            opened.append("read"); return np.zeros((numframes, 1), np.float32)
+            def record(self, numframes):
+                time.sleep(0.01)
+                return np.zeros((numframes, 1), np.float32)
 
-    class FakeSoundcard:
-        @staticmethod
-        def default_microphone():
-            class M:
-                def recorder(self, samplerate, channels):
-                    return Rec()
-            return M()
+        class M:
+            def recorder(self, samplerate, channels):
+                return Rec()
+        self.default_microphone = lambda: M()
 
-    real = sys.modules.get("soundcard")
-    sys.modules["soundcard"] = FakeSoundcard
-    try:
-        D.Mic().warm()
-    finally:
-        if real is None:
+    def __enter__(self):
+        self.real = sys.modules.get("soundcard")
+        sys.modules["soundcard"] = self
+        return self
+
+    def __exit__(self, *a):
+        if self.real is None:
             sys.modules.pop("soundcard", None)
         else:
-            sys.modules["soundcard"] = real
-    assert opened == ["open", "read", "close"], opened
-    svc = service()
-    svc._warm()
-    assert svc.mic.warmed == 1, "dictation must warm the microphone when it switches on"
+            sys.modules["soundcard"] = self.real
 
 
-def t_mic_warm_failure_harmless():
+def t_no_mic_open_at_start_up():
+    # 2.3.1 opened the microphone when Notewell started; twice on 17 Nov that froze
+    # the laptop's built-in microphone. Switching dictation on must not touch it.
+    with _FakeSoundcard() as sc:
+        svc = service()
+        svc.mic = D.Mic()
+        svc._warm()
+        time.sleep(0.1)
+    assert sc.opened == [], f"the microphone was opened at start-up: {sc.opened}"
+
+
+def t_mic_says_when_live():
+    # The microphone can take 4-7 s to start. The real Mic must say when sound arrives,
+    # once, so the bubble can switch from "Wait" to "Listening".
+    live = []
+    with _FakeSoundcard() as sc:
+        mic = D.Mic()
+        mic.start(on_live=lambda: live.append(1))
+        end = time.perf_counter() + 2
+        while not live and time.perf_counter() < end:
+            time.sleep(0.01)
+        time.sleep(0.05)
+        audio = mic.stop()
+    assert live == [1], live
+    assert mic.opened_after is not None and len(audio) > 0
+    assert sc.opened == ["open", "close"], sc.opened
+
+
+def t_late_mic_does_not_say_listening():
+    # Key let go before the microphone started: the bubble must not jump back to "Listening".
     svc = service()
-    tried = []
-    def boom():
-        tried.append(1)
-        raise OSError("no microphone")
-    svc.mic.warm = boom
-    svc._warm()                                           # must not raise
-    assert tried == [1], "the warm-up was not tried"
-    assert not svc.last_error, "a warm-up failure must not show as a dictation fault"
+    svc.on_hotkey("dictate", "start")
+    svc.on_hotkey("dictate", "stop")
+    svc.mic.on_live()
+    assert svc.desktop.shown == ["waiting", "writing"], svc.desktop.shown
+    svc.on_hotkey("dictate", "start")                      # next press works as normal
+    svc.mic.on_live()
+    assert svc.desktop.shown[-1] == "listening"
 
 
 def t_update_checks_everything_first():
@@ -608,9 +632,10 @@ check("tidy-up on with a provider that trains: stays on this laptop", t_tidy_on_
 check("AI tidy-up failing still types the text", t_tidy_ai_failure_keeps_text)
 check("a paste that fails is recorded as failed", t_failed_paste_recorded)
 check("paste the last one again", t_repaste)
-check("the keys open and close the microphone", t_keys_drive_the_mic)
-check("the microphone is opened once at start-up so the first words are kept", t_mic_warmed_at_start_up)
-check("a microphone that cannot be warmed does not stop dictation", t_mic_warm_failure_harmless)
+check("the keys open and close the microphone; the bubble says 'Wait' until it is live", t_keys_drive_the_mic)
+check("the microphone is not opened when Notewell starts", t_no_mic_open_at_start_up)
+check("the microphone says when sound first arrives", t_mic_says_when_live)
+check("a microphone that starts after the key is let go changes nothing", t_late_mic_does_not_say_listening)
 check("settings: every change is checked before anything is saved", t_update_checks_everything_first)
 check("switching dictation off in Settings stops it at once", t_switch_off_while_running)
 check("status says whether the chosen AI may be used", t_status)
