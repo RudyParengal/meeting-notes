@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.2 — Dictation hears a quiet voice (2026-11-17)
+
+### Fixed
+- **Quiet speech is no longer thrown away as "Didn't hear anything".** Notewell used to judge the average loudness of the whole time you held the keys, so the half-second the microphone takes to start, and the pauses between your words, could pull a quiet voice under the line. It now judges your loudest moments. A bump of the desk in an otherwise silent room still counts as silence.
+
 ## 2.4.1 — Fewer "server not reached" messages (2026-11-17)
 
 ### Fixed

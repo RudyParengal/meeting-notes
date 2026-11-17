@@ -305,6 +305,35 @@ def t_silence_log_says_why():
     assert line and "loudness 0.0010" in line[0] and "microphone took 3.2 s" in line[0], seen
 
 
+def _quiet_speech():
+    # 17 Nov, 18:44: three of four dictations said "Didn't hear anything" at average
+    # loudness 0.0023-0.0036 with the built-in mic, whose room noise is 0.0004. The
+    # microphone start-up and the pauses between words pulled the average under 0.004.
+    rng = np.random.default_rng(1)
+    parts = [np.zeros(int(D.SR * 0.4), np.float32)]                     # mic starting
+    for _ in range(4):
+        parts.append(rng.normal(0, 0.005, int(D.SR * 0.5)).astype(np.float32))   # a few words
+        parts.append(rng.normal(0, 0.0004, int(D.SR * 0.5)).astype(np.float32))  # a pause
+    return np.concatenate(parts)
+
+
+def t_quiet_speech_with_pauses_is_heard():
+    audio = _quiet_speech()
+    assert float(np.sqrt(np.mean(audio ** 2))) < D.QUIET_RMS, "the average must be under the old cut-off"
+    svc = service(text="this is quiet", audio=audio)
+    assert svc.process(audio, time.perf_counter()) is not None, svc.desktop.flashes
+    assert svc.desktop.pasted, "quiet speech with pauses must be typed"
+
+
+def t_room_noise_with_a_click_is_silence():
+    rng = np.random.default_rng(2)
+    audio = rng.normal(0, 0.0004, D.SR * 3).astype(np.float32)          # a quiet room
+    audio[D.SR: D.SR + 320] += 0.05                                      # one bump of the desk
+    svc = service(audio=audio)
+    assert svc.process(audio, time.perf_counter()) is None
+    assert svc.transcribe.calls == [] and svc.desktop.flashes == ["Didn't hear anything"]
+
+
 def t_typed_with_word_list():
     svc = service(text="I sent it to note well today")
     w = svc.store.add_word("Notewell", "note well")
@@ -642,6 +671,8 @@ check("AI tidy-up: right request, refuses other providers, rejects odd answers",
 check("settings get their defaults", t_defaults_filled)
 check("silence and key taps type nothing", t_silence_not_typed)
 check("the silence log line says how loud and how slow the microphone was", t_silence_log_says_why)
+check("quiet speech with pauses is heard (judged by its loudest moments)", t_quiet_speech_with_pauses_is_heard)
+check("room noise with one bump of the desk is still silence", t_room_noise_with_a_click_is_silence)
 check("speech is typed with the word list applied and counted", t_typed_with_word_list)
 check("nothing is typed into a password box; it is kept in history", t_password_box_held)
 check("tidy-up off: the AI is never contacted", t_tidy_off_never_calls_ai)

@@ -41,7 +41,21 @@ log = logging.getLogger("dictation")
 SR = 16000
 MIN_SECONDS = 0.3          # shorter than this is a key tapped by accident
 MAX_SECONDS = 300          # a key stuck down must not record forever
-QUIET_RMS = 0.004          # below this there is no speech; the model would invent some
+QUIET_RMS = 0.004          # loudest moments below this = no speech; the model would invent some
+FRAME_SECONDS = 0.1        # loudness is measured per tenth of a second...
+LOUD_PERCENTILE = 90       # ...and judged on the loudest tenth of those, so pauses and the
+                           # microphone start-up cannot hide quiet speech, and one bump
+                           # of the desk in a silent room is not mistaken for it
+
+
+def speech_level(audio) -> float:
+    """How loud the loudest moments are (not the average over the whole hold)."""
+    n = int(SR * FRAME_SECONDS)
+    frames = len(audio) // n
+    if frames == 0:
+        return float(np.sqrt(np.mean(audio ** 2))) if len(audio) else 0.0
+    rms = np.sqrt(np.mean(np.asarray(audio[:frames * n]).reshape(frames, n) ** 2, axis=1))
+    return float(np.percentile(rms, LOUD_PERCENTILE))
 TEST_WAV_ENV = "NOTEWELL_DICTATION_TEST_WAV"
 
 DEFAULTS = {
@@ -584,7 +598,7 @@ class DictationService:
         if seconds < MIN_SECONDS:
             self.desktop.hide()
             return None
-        level = float(np.sqrt(np.mean(audio ** 2))) if len(audio) else 0.0
+        level = speech_level(audio)
         if level < QUIET_RMS:
             wait = self._mic_wait
             log.info("dictation: %.1f s of silence, nothing typed; loudness %.4f (needs %.3f); "
