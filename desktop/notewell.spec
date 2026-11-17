@@ -4,9 +4,17 @@
 # frozen modules: they find their own files (the dashboard, the speaker models)
 # relative to __file__, and notewell.py puts them on sys.path at start-up.
 # Because PyInstaller never reads them, the libraries they use are listed here.
+import os
+import sys
+
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 REPO = SPECPATH + "/.."
+
+# Python's own DLLs first. PyInstaller looks for libssl/libcrypto along PATH, and
+# on a computer with MySQL or Git installed it took their copies instead; one of
+# them lacks a function Python's _ssl needs and the built app died at start-up.
+os.environ["PATH"] = os.path.join(sys.base_prefix, "DLLs") + os.pathsep + os.environ.get("PATH", "")
 
 datas = [
     (REPO + "/backend", "backend"),
