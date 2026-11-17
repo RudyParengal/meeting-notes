@@ -92,6 +92,23 @@ def t_exact_match():
     assert acts == [("dictate", "start")], acts
 
 
+def t_default_is_ctrl_shift():
+    # 17 Nov, 19:30: 4 of Rudy's 5 dictations were typed into Windows Search, which the
+    # Win key of Ctrl+Win opened. Rudy chose Ctrl+Shift instead: no Win key at all.
+    assert D.DEFAULTS["dictation_hotkey"] == "ctrl+shift"
+    assert WIN not in frozenset().union(*D.parse_hotkey(D.DEFAULTS["dictation_hotkey"])[1])
+    s = hk(dictate=D.DEFAULTS["dictation_hotkey"], repaste=D.DEFAULTS["dictation_repaste_hotkey"])
+    acts, kept = feed(s, (SHIFT, True), (CTRL, True), (CTRL, False), (SHIFT, False))
+    assert acts == [("dictate", "start"), ("dictate", "stop")] and kept == [], (acts, kept)
+    # Ctrl+Shift+Right selects a word: dictation stops at once and Right still reaches Windows
+    acts, kept = feed(s, (CTRL, True), (SHIFT, True), (RIGHT, True), (RIGHT, False),
+                      (SHIFT, False), (CTRL, False))
+    assert acts == [("dictate", "start"), ("dictate", "cancel")] and kept == [], (acts, kept)
+    # Alt+Shift+V (type the last one again) does not set off dictation
+    acts, _ = feed(s, (ALT, True), (SHIFT, True), (V, True), (V, False), (SHIFT, False), (ALT, False))
+    assert acts == [("repaste", "start"), ("repaste", "stop")], acts
+
+
 def t_cancel_on_other_key():
     s = hk(dictate="ctrl+win")
     acts, kept = feed(s, (CTRL, True), (WIN, True), (RIGHT, True), (RIGHT, False), (WIN, False))
@@ -568,7 +585,7 @@ def t_status():
     svc = service(ai={"provider": "openrouter", "base_url": "https://openrouter.ai/api/v1"})
     st = svc.status()
     assert st["tidy_ai"] == {"provider": "openrouter", "allowed": False}, st["tidy_ai"]
-    assert st["enabled"] and st["hotkey"] == "ctrl+win" and st["totals"]["dictations"] == 0
+    assert st["enabled"] and st["hotkey"] == "ctrl+shift" and st["totals"]["dictations"] == 0
     assert service().status()["tidy_ai"] is None
 
 
@@ -690,6 +707,7 @@ print("dictation")
 check("shortcuts are read in any order and spelling", t_parse_ok)
 check("shortcuts that would get in the way are refused, in plain words", t_parse_refuses)
 check("dictation starts only on exactly its keys", t_exact_match)
+check("the default keys are Ctrl+Shift (no Win key to open Search)", t_default_is_ctrl_shift)
 check("another key pressed with the shortcut cancels (Windows shortcut, not dictation)", t_cancel_on_other_key)
 check("the V of Alt+Shift+V is not typed; Alt and Shift still reach Windows", t_trigger_key_kept_back)
 check("holding the keys down does not restart dictation", t_auto_repeat)

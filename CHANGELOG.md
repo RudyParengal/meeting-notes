@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.4 — Dictation keys are now Ctrl+Shift (2026-11-17)
+
+### Changed
+- **Hold Ctrl+Shift to dictate, instead of Ctrl+Win.** The Windows key could open Windows Search, which then caught the words instead of the program you were typing in. The new keys do not use the Windows key at all.
+- Anyone who chose their own keys in Settings keeps them.
+- Shortcuts that start with Ctrl+Shift (for example Ctrl+Shift+Arrow to select a word) still work; the listening badge may flash for a moment and close without typing anything.
+
 ## 2.4.3 — Dictation hears a normal speaking voice (2026-11-17)
 
 ### Fixed

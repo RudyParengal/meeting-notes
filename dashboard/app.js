@@ -919,7 +919,7 @@ function prettyKeys(k) {
 function dictationCard() {
   var d = dict;
   var on = h('input', { type: 'checkbox', checked: d.enabled, onchange: function() { saveDictation({ enabled: on.checked }); } });
-  var hot = h('input', { type: 'text', value: d.hotkey, placeholder: 'ctrl+win' });
+  var hot = h('input', { type: 'text', value: d.hotkey, placeholder: 'ctrl+shift' });
   var rep = h('input', { type: 'text', value: d.repaste_hotkey, placeholder: 'alt+shift+v (empty = off)' });
   var model = h('select', { onchange: function() { saveDictation({ model: model.value }); } },
     [['base', 'Base: fastest (recommended)'], ['small', 'Small: more accurate, about 2 s slower']]

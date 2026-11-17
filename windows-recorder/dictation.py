@@ -1,6 +1,6 @@
 """Hold-to-talk dictation for Windows.
 
-Hold the dictation keys (Ctrl+Win by default) anywhere in Windows, speak,
+Hold the dictation keys (Ctrl+Shift by default) anywhere in Windows, speak,
 let go: the words are typed into whichever app has the cursor. A second key
 combination (Alt+Shift+V) types the last dictation again.
 
@@ -64,7 +64,8 @@ TEST_WAV_ENV = "NOTEWELL_DICTATION_TEST_WAV"
 
 DEFAULTS = {
     "dictation_enabled": True,
-    "dictation_hotkey": "ctrl+win",
+    "dictation_hotkey": "ctrl+shift",   # not Ctrl+Win: the Win key opened Windows Search,
+                                        # which then took the typing (17 Nov, 4 of 5 tries)
     "dictation_repaste_hotkey": "alt+shift+v",
     "dictation_model": "base",
     "dictation_language": "en",

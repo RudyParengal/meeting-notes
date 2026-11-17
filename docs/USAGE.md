@@ -38,7 +38,7 @@ If the recorder hears silence for 10 seconds it warns you — usually the wrong 
 ## Dictation (Windows app)
 
 1. Click where the text should go — any program.
-2. Hold **Ctrl+Win** and speak. A small "listening" badge shows at the bottom of the screen.
+2. Hold **Ctrl+Shift** and speak. A small "listening" badge shows at the bottom of the screen.
 3. Let go. The text appears at the cursor, usually within a second.
 
 - **Wrong window?** Press **Alt+Shift+V** to paste the last dictation again.
