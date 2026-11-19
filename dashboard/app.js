@@ -211,9 +211,11 @@ async function start() {
     if (isAdmin()) await Promise.all([loadAI(), loadRecorder()]);
     renderShell();
     loadSessions();
-    every(10000, loadSessions);
+    every(5000, loadSessions);
+    every(5000, refreshDictation);
+    every(5000, function() { if (view === 'recordings' && !document.hidden) loadRecordings(); });
     every(1000, function() { if (rec && (view === 'home' || rec.recording || rec.processing)) loadRecorder(true); });
-    go(view === 'settings' || view === 'trash' ? view : 'home');
+    go(['settings', 'trash', 'dictation', 'recordings'].indexOf(view) >= 0 ? view : 'home');
   } catch (e) { /* a 401 has already shown the sign-in screen */ }
 }
 
@@ -287,6 +289,8 @@ function renderNav() {
     return h('button', { class: view === id ? 'on' : '', onclick: function() { go(id); } }, label, extra);
   };
   nav.appendChild(item('home', 'Home'));
+  if (isAdmin() && rec) nav.appendChild(item('dictation', 'Dictation'));
+  if (isAdmin() && rec) nav.appendChild(item('recordings', 'Screen recordings'));
   if (isAdmin()) nav.appendChild(item('settings', 'Settings', ai && !ai.ready ? h('span', { class: 'pill warn', style: 'margin-left:auto' }, 'set up') : null));
   nav.appendChild(item('trash', 'Trash', trashCount ? h('span', { class: 'count' }, trashCount) : null));
 }
@@ -374,6 +378,8 @@ function go(v) {
   main.scrollTop = 0;
   if (v === 'home') renderHome();
   else if (v === 'settings') renderSettings();
+  else if (v === 'dictation') { main.appendChild(h('div', { class: 'page narrow' }, h('h1', {}, 'Dictation'), h('div', { id: 'dictation-cards' }, h('p', { class: 'dim' }, 'Loading…')))); loadDictation(); }
+  else if (v === 'recordings') renderRecordings();
   else if (v === 'trash') { main.appendChild(h('div', { class: 'page narrow', id: 'trash-page' }, h('h1', {}, 'Trash'), h('p', { class: 'dim' }, 'Loading…'))); loadSessions(); }
 }
 
@@ -394,6 +400,7 @@ function renderHome() {
   }
   var left = h('div', {});
   if (rec) left.appendChild(recorderCard());
+  if (rec) left.appendChild(screenCard());
   left.appendChild(importCard());
   page.appendChild(h('div', { class: 'home-grid' }, left,
     h('div', { class: 'card recent' }, h('h2', {}, 'Recent meetings'), h('div', { id: 'recent' }))));
@@ -447,6 +454,39 @@ function recorderCard() {
       h('span', { class: 'spinner' }), 'Getting the speech model ready. The first time this downloads about 500 MB; you can record meanwhile.'));
   }
   updateMetersSoon();
+  return card;
+}
+
+// Screen recording (desktop app). The card keeps itself up to date while it is on screen.
+function screenCard() {
+  var card = h('div', { class: 'card', id: 'screen-card' });
+  var paint = function(s) {
+    var key = JSON.stringify(s && [s.available, s.recording, s.uploading, s.waiting, s.last_link, s.hotkey]);
+    if (key === card._key) return;                                  // nothing changed: leave the button alone
+    card._key = key;
+    card.innerHTML = '';
+    if (!s || !s.available) { card.style.display = 'none'; return; }
+    card.style.display = '';
+    card.appendChild(h('h2', {}, s.recording ? '● Recording your screen' : 'Record your screen'));
+    card.appendChild(h('p', { class: 'hint' }, s.recording
+      ? 'Press ' + s.hotkey + ' or the Stop button on the screen to finish. The link is copied for you.'
+      : 'Your screen and your voice. When you stop, a link is copied: anyone you send it to can watch, no account needed. Shortcut: ' + s.hotkey + '.'));
+    card.appendChild(h('button', { class: 'btn' + (s.recording ? '' : ' primary'), onclick: async function() {
+      var r = await api('/screen/toggle', { method: 'POST' });
+      if (!r.ok) { toast('Could not ' + (s.recording ? 'stop' : 'start') + ': ' + await errorText(r)); return; }
+      paint(await r.json());
+    } }, s.recording ? 'Stop' : 'Record screen'));
+    if (s.uploading) card.appendChild(h('p', { class: 'dim' }, 'Uploading “' + s.uploading + '”…'));
+    else if (s.waiting) card.appendChild(h('p', { class: 'dim' }, s.waiting + ' recording' + (s.waiting > 1 ? 's' : '') + ' waiting to upload. They go up by themselves when the server can be reached.'));
+    if (s.last_link) card.appendChild(h('p', { class: 'dim' }, 'Last link: ', h('a', { href: s.last_link, target: '_blank' }, s.last_link)));
+  };
+  var tick = async function() {
+    if (!document.body.contains(card) && card._started) return;      // the page moved on
+    card._started = true;
+    try { var r = await api('/screen'); paint(r.ok ? await r.json() : null); } catch (e) {}
+    setTimeout(tick, 2000);
+  };
+  setTimeout(tick, 0);
   return card;
 }
 
@@ -995,7 +1035,7 @@ function wordsCard() {
 
 function historyCard() {
   var list = h('div', {}, h('p', { class: 'dim' }, 'Loading…'));
-  var card = h('div', { class: 'card' }, h('h2', {}, 'Dictation history'),
+  var card = h('div', { class: 'card', id: 'dict-history' }, h('h2', {}, 'Dictation history'),
     h('p', { class: 'hint' }, 'Kept on this computer, and on your other devices when you are signed in to your account. ', h('b', {}, prettyKeys(dict.repaste_hotkey) || 'The repaste shortcut'), ' types the latest one again.'),
     list);
   var oldest = null;
@@ -1012,7 +1052,7 @@ function historyCard() {
   async function page() {
     var r = await api('/dictation/history?limit=50' + (oldest != null ? '&before=' + oldest : ''));
     var items = r.ok ? (await r.json()).items : [];
-    if (first) { list.innerHTML = ''; first = false; }
+    if (first) { list.innerHTML = ''; first = false; dictNewest = items.length ? items[0].created_at : 0; }
     if (!items.length && !list.children.length) list.appendChild(h('p', { class: 'dim' }, 'Nothing dictated yet.'));
     items.forEach(function(it) {
       var when = new Date(it.created_at * 1000);
@@ -1026,6 +1066,69 @@ function historyCard() {
   }
   page();
   return card;
+}
+
+// Live: a line dictated here or on another device shows within about 5 seconds (18 Nov 2026).
+var dictNewest = null;
+async function refreshDictation() {
+  if ((view !== 'dictation' && view !== 'settings') || document.hidden || dictNewest === null || !$('dict-history')) return;
+  try {
+    var r = await api('/dictation/history?limit=1');
+    if (!r.ok) return;
+    var items = (await r.json()).items || [];
+    var n = items.length ? items[0].created_at : 0;
+    var old = $('dict-history');
+    if (n !== dictNewest && old && dict) old.replaceWith(historyCard());
+  } catch (e) {}
+}
+
+// --- screen recordings: kept on your server; this page reads them through this PC's sign-in ---
+
+var recShown = null;     // what is on screen, so the 5-second refresh redraws only on a change
+
+function renderRecordings() {
+  recShown = null;
+  $('main').appendChild(h('div', { class: 'page narrow', id: 'rec-page' },
+    h('h1', {}, 'Screen recordings'),
+    h('p', { class: 'dim', style: 'margin:0 0 16px' }, 'Press Ctrl+Shift+R to start and again to stop. The link is on your clipboard a few seconds later.'),
+    h('div', { id: 'rec-list' }, h('p', { class: 'dim' }, 'Loading…'))));
+  loadRecordings();
+}
+
+async function loadRecordings() {
+  var box = $('rec-list');
+  if (!box) return;
+  var r, d;
+  try { r = await api('/account/recordings'); d = r.ok ? await r.json() : null; } catch (e) { return; }
+  if (!$('rec-list')) return;
+  var key = d ? JSON.stringify(d) : 'error ' + r.status;
+  if (key === recShown) return;
+  recShown = key;
+  box.innerHTML = '';
+  if (!d) { box.appendChild(h('div', { class: 'card dim' }, await errorText(r))); return; }
+  var items = (d.recordings || []).filter(function(x) { return !x.trashed; });
+  if (!items.length) { box.appendChild(h('div', { class: 'card dim' }, 'No screen recordings yet.')); return; }
+  var card = h('div', { class: 'card', style: 'padding:8px' });
+  items.forEach(function(x) {
+    var ready = x.status === 'ready';
+    var bits = [new Date(x.created * 1000).toLocaleDateString() + ' ' + timeOf(x.created * 1000)];
+    if (x.duration_sec) bits.push(clock(x.duration_sec));
+    if (x.password_set) bits.push('password set');
+    var pill = !ready ? h('span', { class: 'pill warn' }, x.status === 'uploading' ? 'uploading' : x.status)
+      : x.share_on ? h('span', { class: 'pill ok' }, 'link on') : h('span', { class: 'pill' }, 'link off');
+    card.appendChild(h('div', { class: 'row', style: 'padding:8px 4px;border-bottom:1px solid var(--border)' },
+      h('div', { style: 'flex:1;min-width:0' }, h('b', {}, x.title || 'Screen recording'), ' ', pill,
+        h('div', { class: 'hint' }, bits.join(' · '))),
+      ready && x.share_url ? h('button', { class: 'btn small', onclick: function() { copyText(x.share_url, 'Link copied'); } }, 'Copy link') : null,
+      ready && x.share_url ? h('a', { class: 'btn small', href: x.share_url, target: '_blank', rel: 'noopener noreferrer' }, 'Watch') : null,
+      ready ? h('button', { class: 'btn small', onclick: async function(ev) {
+        ev.target.disabled = true;
+        var c = await api('/account/recordings/' + encodeURIComponent(x.id), { method: 'PATCH', json: { share_on: !x.share_on } });
+        if (!c.ok) { toast('Not changed: ' + await errorText(c)); ev.target.disabled = false; return; }
+        toast(x.share_on ? 'Link switched off: nobody can watch it now' : 'Link switched on');
+        recShown = null; loadRecordings(); } }, x.share_on ? 'Switch link off' : 'Switch link on') : null));
+  });
+  box.appendChild(card);
 }
 
 function aiCard() {

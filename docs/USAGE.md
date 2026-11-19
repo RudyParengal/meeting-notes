@@ -52,6 +52,35 @@ Everything else is in **Settings → Dictation**: switch it off, change the keys
 
 ---
 
+## Recording your screen (Windows app)
+
+1. Press **Ctrl+Shift+R** (or tray menu → **Record screen**). With two screens, pick one. The screen edge flashes red with **Recording**.
+2. Talk through what you are showing. The microphone is recorded with the screen.
+3. Press **Ctrl+Shift+R** again. A blue **Stopped** flash, then a few seconds later a green **Link copied — ready to paste** flash: the share link is on the clipboard.
+
+- **The flashes never appear in the recording**, a screenshot or a screen share, and you can click straight through them.
+- An orange **Saved on this PC** flash means there is no internet or the laptop is not signed in: the link is copied when it uploads.
+- While Notewell runs, Ctrl+Shift+R no longer does a "hard reload" in Chrome or Edge. Use **Ctrl+F5** for that, or choose other keys (below).
+
+- **Needs the laptop signed in** to your server (Settings → Your account). If it is not, or there is no internet, the recording waits in `%USERPROFILE%\Notewell\screen\outbox` and goes up later.
+- **Notewell's own windows are left out** of the recording.
+- **Password managers and banking pages:** you get a warning first. You can still record.
+- After upload the file moves to `screen\sent` and is removed from the laptop after 7 days. The server keeps its copy.
+- Change the keys with `screen_hotkey` in `%USERPROFILE%\Notewell\recorder\config.json` (for example `"screen_hotkey": "ctrl+alt+s"`), then restart Notewell.
+
+### Finding a recording later
+
+| Where | How |
+|---|---|
+| **Laptop app** | **Screen recordings** in the left menu: Copy link, Watch, and a switch to turn the link off or on |
+| **Website and phone** | The **Recordings** tab beside Meetings and Dictation |
+
+## Everything in one place, kept up to date
+
+Meetings, dictation and screen recordings show in the laptop app, on the website and on the phone. Each page checks every 5 seconds and redraws when something changed, so a recording made on the laptop shows on the phone without a refresh. Dictation done on the laptop reaches the website on the laptop's next sync, which can take up to a minute.
+
+---
+
 ## The dashboard
 
 Open `http://127.0.0.1:8766` (or your server's address) and log in.

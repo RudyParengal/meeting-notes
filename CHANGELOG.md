@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.6.0 — Ctrl+Shift+R, and the screen tells you what is happening (unreleased)
+
+### Changed
+- **Record your screen with Ctrl+Shift+R** instead of Ctrl+Alt+R. Anyone who chose their own keys (`screen_hotkey`) keeps them. While Notewell runs, Ctrl+Shift+R no longer hard-reloads a page in Chrome or Edge; Ctrl+F5 still does.
+
+### Added
+- **A moment of colour on the screen**: red **Recording** when it starts, blue **Stopped** when you stop, green **Link copied — ready to paste** when the link is on the clipboard, orange **Saved on this PC** when it has to wait for the internet. None of it appears in the recording, a screenshot or a screen share, and clicks go straight through it.
+- **Dictation and Screen recordings have their own pages in the laptop app.** Screen recordings lists every recording on your account, with Copy link, Watch and a switch to turn each link off or on. Dictation holds its settings, your words and the history.
+- **Everything stays up to date by itself, on the laptop, the website and the phone.** Each page checks every 5 seconds and redraws only when something changed: a new meeting, a new dictation, a new recording, a link switched off.
+
+## 2.5.0 — Record your screen and get a share link (2026-11-18)
+
+### Added
+- **Press Ctrl+Alt+R to record your screen and your voice. Press it again to stop.** A few seconds later a link is on the clipboard and a notice says so. Anyone with the link can watch it on notes.parengal.com without an account. Also in the tray menu ("Record screen") and on the dashboard.
+- **Two screens:** a small window asks which one. One screen: it records that one.
+- **No internet?** The recording waits on the laptop and goes up when the connection is back; the link is copied then.
+- **Notewell's own windows never appear in a recording** (this also hides the dictation badge from screen shares and screenshots).
+- **A warning before recording a password manager or a banking page.** You can still record.
+- Recording the screen runs on its own, so it cannot stop a meeting recording or dictation running at the same time.
+
 ## 2.4.5 — Hands-free dictation, and no more flashing badge (2026-11-17)
 
 ### Added

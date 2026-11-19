@@ -1469,6 +1469,9 @@ def main(hooks=None):
         except Exception:
             log.info(f"NOTIFY: {title} — {msg}")
 
+    if hooks is not None:
+        hooks["notify"] = notify                  # screen recording reports through the tray too
+
     mgr = MeetingManager(cfg, notify)
 
     def on_start(icon_, item):
@@ -1625,6 +1628,9 @@ def main(hooks=None):
         pystray.MenuItem("Live transcript window",
                          live_transcript_toggle,
                          checked=lambda i: cfg.get("live_transcript", False)),
+        pystray.MenuItem(lambda i: hooks["screen"].label() if hooks and hooks.get("screen") else "",
+                         lambda i, it: hooks["screen"].toggle(),
+                         visible=lambda i: bool(hooks and hooks.get("screen"))),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("🔊 Test Audio (5s)", _test_audio),
         pystray.MenuItem("Audio Source", _build_source_menu()),

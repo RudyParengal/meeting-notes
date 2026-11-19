@@ -4,7 +4,8 @@ Off unless %USERPROFILE%\Notewell\linked-server.json exists:
 
     {"url": "https://notes.example.com", "api_key": "<that server's key>"}
 
-Then, once a minute:
+Then, within seconds of the server saying something changed (it is asked every
+5 seconds), and at least once a minute:
   - every note on that server is copied here (new ones, and changed ones again)
   - tags, trash and restore follow whichever side changed since the last pass;
     when both did, the server wins
@@ -26,6 +27,7 @@ locked to this Windows user (backend/sealed.py) the first time it is read.
 """
 import json
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -37,7 +39,8 @@ from urllib3.util import Retry
 import sealed
 
 log = logging.getLogger("linked")
-INTERVAL = 60
+INTERVAL = 60      # the longest this PC waits between passes
+CHECK_EVERY = 5    # how often it asks the server "has anything of mine changed?" (18 Nov 2026)
 
 
 def read_link(home: Path) -> dict:
@@ -266,8 +269,46 @@ class Link:
             out["error"] = f"server not reached: {type(e).__name__}"
         return out
 
+    # --- screen recordings: they live on the server only; this PC reads and changes them ---
+
+    def recordings(self) -> list:
+        return self._get("/recordings").get("recordings", [])
+
+    def change_recording(self, rid: str, changes: dict) -> dict:
+        """Rename a recording or switch its link on or off. Nothing else is passed on."""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", rid or ""):
+            raise ValueError("not a recording id")
+        body = {k: changes[k] for k in ("title", "share_on") if k in changes}
+        return self._send("PATCH", f"/recordings/{rid}", json=body).json()
+
+    def changes(self):
+        """The server's change marks, or None when it cannot say (an older server, offline)."""
+        try:
+            return self._get("/account/changes", all="true")
+        except Exception:
+            return None
+
+    def pause(self, marks, store=None) -> None:
+        """Wait up to INTERVAL, but stop early once the server says a meeting or
+        dictation changed since `marks`, or this PC has dictation waiting to go.
+        While the server does not answer, it simply waits the full INTERVAL."""
+        end = time.monotonic() + INTERVAL
+        while (left := end - time.monotonic()) > 0:
+            if self.wake.wait(min(CHECK_EVERY, left)):
+                return
+            now = self.changes()
+            if now is None:
+                continue
+            if marks is None:
+                marks = now
+            if any(now.get(k) != marks.get(k) for k in ("meetings", "dictation")):
+                return
+            if store is not None and store.unsent_dictations(1):
+                return
+
     def run(self):
         while True:
+            marks = self.changes()   # taken before the pass, so nothing that changes during it is missed
             try:
                 n = self.sync()
                 if any(n.values()):
@@ -282,7 +323,7 @@ class Link:
                         log.info("dictation synced: %s", n)
                 except Exception as e:
                     log.warning("dictation not synced: %s", e)
-            self.wake.wait(INTERVAL)
+            self.pause(marks, store)
             self.wake.clear()
 
 

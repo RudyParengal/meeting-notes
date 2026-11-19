@@ -751,6 +751,27 @@ def recorder_settings(req: RecorderSettings, admin: dict = Depends(admin_only)):
     return {"settings": recorder_bridge.update(req.model_dump(exclude_none=True))}
 
 
+# ------------------------------------- screen recording (desktop app only) ---
+def _screen():
+    svc = recorder_bridge.screen()
+    if svc is None:
+        raise HTTPException(501, "Screen recording is part of the Notewell desktop app.")
+    return svc
+
+
+@app.get("/screen")
+def screen_status(admin: dict = Depends(admin_only)):
+    svc = recorder_bridge.screen()
+    return svc.status() if svc else {"available": False}
+
+
+@app.post("/screen/toggle")
+async def screen_toggle(admin: dict = Depends(admin_only)):
+    svc = _screen()
+    await asyncio.to_thread(svc.toggle)
+    return svc.status()
+
+
 # ------------------------------------------- dictation (desktop app only) ---
 def _dictation():
     svc = recorder_bridge.dictation()
@@ -862,6 +883,43 @@ async def account_sign_in(req: AccountSignIn, admin: dict = Depends(admin_only))
     except Exception as e:
         log.warning("account sign-in failed: %s", type(e).__name__)
         raise HTTPException(502, "Your server could not be reached. Check the address and try again.")
+
+
+class RecordingChange(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=200)
+    share_on: Optional[bool] = None
+
+
+async def _on_server(name: str, *args):
+    """Screen recordings live on your server; this PC passes the dashboard's request on."""
+    fn = _account().get(name)
+    if fn is None:
+        raise HTTPException(501, "Screen recordings need a newer Notewell desktop app.")
+    try:
+        return await asyncio.to_thread(fn, *args)
+    except recorder_bridge.NotSignedIn:
+        raise HTTPException(409, "Sign in to your Notewell server first (Settings, Your account).")
+    except KeyError:
+        raise HTTPException(404, "That recording is no longer there.")
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status == 404:
+            raise HTTPException(404, "That recording is no longer there.")
+        log.warning("recordings: server request failed: %s", type(e).__name__)
+        raise HTTPException(502, "Your server could not be reached. Try again in a moment.")
+
+
+@app.get("/account/recordings")
+async def account_recordings(admin: dict = Depends(admin_only)):
+    return {"recordings": await _on_server("recordings")}
+
+
+@app.patch("/account/recordings/{rid}")
+async def account_change_recording(req: RecordingChange, rid: str = PathParam(..., max_length=64),
+                                   admin: dict = Depends(admin_only)):
+    return await _on_server("change_recording", rid, req.model_dump(exclude_unset=True))
 
 
 # ------------------------------------------------------------- dashboard ---

@@ -138,9 +138,22 @@ def open_window(url: str) -> None:
     only this Windows user can read, not on the command line."""
     if os.name == "nt":
         ctypes.windll.user32.AllowSetForegroundWindow(-1)   # let the window come to the front
-    args = [sys.executable, "--window"] if getattr(sys, "frozen", False) \
-        else [sys.executable, str(Path(__file__).resolve()), "--window"]
-    _windows.append(subprocess.Popen(args, env={**os.environ, "NOTEWELL_WINDOW_URL": url}))
+    _windows.append(subprocess.Popen(child_command("--window"), env={**os.environ, "NOTEWELL_WINDOW_URL": url}))
+
+
+def child_command(flag: str) -> list:
+    """Another copy of this program doing one job (`--window`, `--screen-record`)."""
+    return [sys.executable, flag] if getattr(sys, "frozen", False) \
+        else [sys.executable, str(Path(__file__).resolve()), flag]
+
+
+def _screen_flash(kind: str):
+    """Show a screen flash from another copy: this one runs the tray, so no windows here."""
+    try:
+        subprocess.Popen(child_command("--screen-flash") + [kind],
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except OSError:
+        logging.getLogger("screen").exception("screen flash could not start")
 
 
 def close_windows() -> None:
@@ -242,7 +255,15 @@ def run() -> None:
         logging.getLogger("linked").info("signed in to %s as %s", held["link"].url, email)
         return account_status()
 
-    recorder_bridge.attach_account(status=account_status, sign_in=account_sign_in)
+    def _link():
+        link = held.get("link")
+        if link is None:
+            raise recorder_bridge.NotSignedIn()
+        return link
+
+    recorder_bridge.attach_account(status=account_status, sign_in=account_sign_in,
+                                   recordings=lambda: _link().recordings(),
+                                   change_recording=lambda rid, changes: _link().change_recording(rid, changes))
 
     def warm_up(ctl):
         """Load (on first start, download) the speech model before the first meeting
@@ -270,10 +291,29 @@ def run() -> None:
         except Exception:
             logging.getLogger("dictation").exception("dictation could not start")
 
+    hooks = {}
+    try:                                          # screen recording (windows-recorder/screen_record.py)
+        import screen_record
+        screen = screen_record.ScreenService(
+            HOME, child_command("--screen-record"), get_link=lambda: held.get("link"),
+            notify=lambda title, msg: hooks["notify"](title, msg) if hooks.get("notify") else None,
+            flash=_screen_flash)
+        hooks["screen"] = screen
+        recorder_bridge.attach_screen(screen)
+    except Exception:
+        screen = None
+        logging.getLogger("screen").exception("screen recording could not be set up")
+
     def on_ready(ctl):
         held["manager"], held["cfg"] = ctl["manager"], ctl["cfg"]
         recorder_bridge.attach(**ctl)
         start_dictation(ctl)
+        if screen is not None:                    # a fault here never stops meetings
+            try:
+                screen.cfg = ctl["cfg"]
+                screen.start()
+            except Exception:
+                logging.getLogger("screen").exception("screen recording could not start")
         # Imported audio files use the recorder's model: one copy in memory, one download.
         server._get_whisper = lambda: recorder.get_whisper(ctl["cfg"])
         threading.Thread(target=warm_up, args=(ctl,), daemon=True).start()
@@ -283,12 +323,16 @@ def run() -> None:
             time.sleep(0.1)
         open_dashboard()
 
-    recorder.main(hooks={"on_ready": on_ready, "open_dashboard": open_dashboard,
-                         "open_settings": lambda: open_window(
-                             f"http://127.0.0.1:{port}/#token={server.tokens.issue(ADMIN)}&view=settings")})
+    hooks.update({"on_ready": on_ready, "open_dashboard": open_dashboard,
+                  "open_settings": lambda: open_window(
+                      f"http://127.0.0.1:{port}/#token={server.tokens.issue(ADMIN)}&view=settings")})
+    recorder.main(hooks=hooks)
 
     # Quit was chosen. A meeting that was just stopped is still being transcribed
-    # and sent to the server: finish that before the process ends.
+    # and sent to the server: finish that before the process ends. A screen
+    # recording in progress is stopped and saved; it uploads on the next start.
+    if screen is not None:
+        screen.shutdown()
     if held.get("dictation"):
         held["dictation"].stop()
     mgr = held.get("manager")
@@ -303,6 +347,21 @@ if __name__ == "__main__":
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import window
         sys.exit(window.main())
+    if "--screen-flash" in sys.argv:              # a moment of colour on screen ("Link copied" ...)
+        sys.path[:0] = [str(ROOT / "windows-recorder")]
+        import screen_record
+        sys.exit(screen_record.flash_main(sys.argv[sys.argv.index("--screen-flash") + 1]))
+    if "--screen-record" in sys.argv:             # one screen recording, started by ScreenService
+        sys.path[:0] = [str(ROOT / "windows-recorder")]
+        (HOME / "recorder").mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(level=logging.INFO, filename=str(HOME / "recorder" / "screen.log"),
+                            encoding="utf-8", format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        import screen_record
+        try:
+            sys.exit(screen_record.child_main(os.environ["NOTEWELL_SCREEN_DIR"]))
+        except Exception:
+            logging.getLogger("screen").exception("screen recording failed")
+            sys.exit(1)
     try:
         run()
     except SystemExit as e:

@@ -393,3 +393,107 @@ def test_an_upload_cut_after_sending_is_not_sent_twice(app_module, tmp_path):
         lk._send("POST", "/upload", json={"note": "x"})
     srv.close()
     assert seen == [1]
+
+
+# --- live: sync within seconds of a change (18 Nov 2026) ------------------------
+
+class Marks:
+    """The far server's /account/changes answers, one per question."""
+
+    def __init__(self, *answers):
+        self.answers, self.asked = list(answers), 0
+
+    def __call__(self):
+        self.asked += 1
+        a = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+
+class Unsent:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def unsent_dictations(self, limit=500):
+        return self.rows[:limit]
+
+
+QUIET = {"meetings": "m1", "dictation": "d1", "recordings": "r1"}
+
+
+def _timed_pause(link, monkeypatch, marks, store=None, interval=2.0):
+    import time
+    monkeypatch.setattr(linked_server, "INTERVAL", interval)
+    monkeypatch.setattr(linked_server, "CHECK_EVERY", 0.02)
+    t = time.monotonic()
+    link.pause(marks, store)
+    return time.monotonic() - t
+
+
+def test_a_meeting_changed_on_the_server_starts_a_pass_within_seconds(link, monkeypatch):
+    link.changes = Marks(QUIET, QUIET, {**QUIET, "meetings": "m2"})
+    took = _timed_pause(link, monkeypatch, QUIET)
+    assert took < 1.0 and link.changes.asked == 3
+
+
+def test_dictation_changed_on_the_server_starts_a_pass_too(link, monkeypatch):
+    link.changes = Marks(QUIET, {**QUIET, "dictation": "d2"})
+    assert _timed_pause(link, monkeypatch, QUIET) < 1.0
+
+
+def test_dictation_waiting_on_this_pc_is_sent_without_waiting_a_minute(link, monkeypatch):
+    link.changes = Marks(QUIET)
+    assert _timed_pause(link, monkeypatch, QUIET, Unsent([{"uid": "local-row-0001"}])) < 1.0
+
+
+def test_nothing_changed_means_it_waits_the_full_interval_and_keeps_asking(link, monkeypatch):
+    link.changes = Marks(QUIET)
+    took = _timed_pause(link, monkeypatch, QUIET, Unsent([]), interval=0.3)
+    assert took >= 0.29 and link.changes.asked >= 5
+
+
+def test_a_server_that_cannot_say_falls_back_to_once_a_minute(link, monkeypatch):
+    """Older server (no such route) or offline: no early pass, no crash, even with dictation waiting."""
+    link.changes = Marks(None)
+    took = _timed_pause(link, monkeypatch, None, Unsent([{"uid": "local-row-0001"}]), interval=0.3)
+    assert took >= 0.29
+
+
+def test_a_new_recording_alone_does_not_start_a_pass(link, monkeypatch):
+    """Recordings are not copied to this PC, so their mark moving is no reason to sync."""
+    link.changes = Marks({**QUIET, "recordings": "r2"})
+    assert _timed_pause(link, monkeypatch, QUIET, interval=0.3) >= 0.29
+
+
+def test_changes_asks_for_everyones_meetings_and_never_raises(link):
+    asked = []
+    link._get = lambda path, **p: asked.append((path, p)) or QUIET
+    assert link.changes() == QUIET and asked == [("/account/changes", {"all": "true"})]
+
+    def boom(path, **p):
+        raise linked_server.requests.HTTPError("404")
+    link._get = boom
+    assert link.changes() is None
+
+
+# --- screen recordings, read and changed from this PC's dashboard (18 Nov 2026) ---
+def test_recordings_are_read_from_the_server(link):
+    asked = []
+    link._get = lambda path, **p: asked.append(path) or {"recordings": [{"id": "abc123", "title": "Made-up"}]}
+    assert link.recordings() == [{"id": "abc123", "title": "Made-up"}] and asked == ["/recordings"]
+
+
+def test_only_the_title_and_link_switch_are_sent(link):
+    sent = []
+    link._send = lambda method, path, **kw: sent.append((method, path, kw)) or Reply({"id": "abc123", "share_on": False})
+    out = link.change_recording("abc123", {"share_on": False, "title": "New name", "password": "not-real"})
+    assert out == {"id": "abc123", "share_on": False}
+    assert sent == [("PATCH", "/recordings/abc123", {"json": {"share_on": False, "title": "New name"}})]
+
+
+def test_an_odd_recording_id_is_refused_before_anything_is_sent(link):
+    link._send = lambda *a, **k: pytest.fail("nothing should be sent")
+    for bad in ("../account", "abc/def", "", "x" * 65):
+        with pytest.raises(ValueError):
+            link.change_recording(bad, {"share_on": True})

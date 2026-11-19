@@ -39,14 +39,35 @@ def dictation():
     return _dictation
 
 
+# Screen recording (windows-recorder/screen_record.py), desktop app only.
+_screen = None
+
+
+def attach_screen(service) -> None:
+    global _screen
+    _screen = service
+
+
+def screen():
+    return _screen
+
+
 # The account on your own server (desktop/linked_server.py), desktop app only:
-# {"status": () -> dict, "sign_in": (url, email, password) -> dict}
+# {"status": () -> dict, "sign_in": (url, email, password) -> dict,
+#  "recordings": () -> list, "change_recording": (id, changes) -> dict}
 _account: Optional[dict] = None
 
 
-def attach_account(*, status: Callable[[], dict], sign_in: Callable[[str, str, str], dict]) -> None:
+def attach_account(*, status: Callable[[], dict], sign_in: Callable[[str, str, str], dict],
+                   recordings: Optional[Callable[[], list]] = None,
+                   change_recording: Optional[Callable[[str, dict], dict]] = None) -> None:
     global _account
-    _account = {"status": status, "sign_in": sign_in}
+    _account = {"status": status, "sign_in": sign_in,
+                "recordings": recordings, "change_recording": change_recording}
+
+
+class NotSignedIn(Exception):
+    """This PC is not signed in to a Notewell server, so it has no recordings to show."""
 
 
 def account() -> Optional[dict]:

@@ -329,3 +329,59 @@ def test_the_dashboard_signs_this_pc_in(client, admin, app_module, monkeypatch):
     alice = {"X-API-Key": make_user(client, admin)["api_key"]}
     assert client.get("/account", headers=alice).status_code == 403
     assert client.post("/account/signin", headers=alice, json={**form, "password": "x"}).status_code == 403
+
+
+# ---------------------------- screen recordings on this PC's dashboard (18 Nov) ---
+def _with_recordings(app_module, monkeypatch, linked=True, fail=None):
+    changed = []
+
+    def recordings():
+        if not linked:
+            raise app_module.recorder_bridge.NotSignedIn()
+        if fail:
+            raise fail
+        return [{"id": "abc123", "title": "Made-up", "share_on": True}]
+
+    def change(rid, changes):
+        if rid == "gone00":
+            raise KeyError(rid)
+        changed.append((rid, changes))
+        return {"id": rid, **changes}
+
+    monkeypatch.setattr(app_module.recorder_bridge, "_account", None)
+    app_module.recorder_bridge.attach_account(status=lambda: pytest.fail("no need to ask the server who we are"), sign_in=lambda *a: {},
+                                              recordings=recordings, change_recording=change)
+    return changed
+
+
+def test_the_dashboard_lists_screen_recordings(client, admin, app_module, monkeypatch):
+    _with_recordings(app_module, monkeypatch)
+    r = client.get("/account/recordings", headers=admin)
+    assert r.status_code == 200 and r.json() == {"recordings": [{"id": "abc123", "title": "Made-up", "share_on": True}]}
+
+
+def test_the_dashboard_switches_a_link_off_and_renames(client, admin, app_module, monkeypatch):
+    changed = _with_recordings(app_module, monkeypatch)
+    r = client.patch("/account/recordings/abc123", headers=admin, json={"share_on": False, "title": "New name"})
+    assert r.status_code == 200 and r.json()["share_on"] is False
+    assert changed == [("abc123", {"share_on": False, "title": "New name"})]
+    assert client.patch("/account/recordings/gone00", headers=admin, json={"share_on": True}).status_code == 404
+
+
+def test_recordings_need_this_pc_signed_in_and_say_so(client, admin, app_module, monkeypatch):
+    _with_recordings(app_module, monkeypatch, linked=False)
+    r = client.get("/account/recordings", headers=admin)
+    assert r.status_code == 409 and "Sign in" in r.json()["detail"]
+
+
+def test_an_unreachable_server_is_a_plain_message(client, admin, app_module, monkeypatch):
+    _with_recordings(app_module, monkeypatch, fail=OSError("cut"))
+    r = client.get("/account/recordings", headers=admin)
+    assert r.status_code == 502 and "could not be reached" in r.json()["detail"]
+
+
+def test_only_the_admin_sees_recordings(client, admin, app_module, monkeypatch):
+    _with_recordings(app_module, monkeypatch)
+    alice = {"X-API-Key": make_user(client, admin)["api_key"]}
+    assert client.get("/account/recordings", headers=alice).status_code == 403
+    assert client.patch("/account/recordings/abc123", headers=alice, json={"share_on": False}).status_code == 403

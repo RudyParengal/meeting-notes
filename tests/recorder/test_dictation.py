@@ -335,6 +335,20 @@ def t_tap_starts_handsfree_and_tap_again_types():
     assert svc.desktop.masks == 2, "the second tap must not set off Windows either"
 
 
+def t_screen_key_does_not_start_handsfree():
+    # 2.6.0: Ctrl+Shift+R records the screen. Pressed quickly it must not look like a
+    # Ctrl+Shift tap and leave dictation listening hands-free.
+    svc = handsfree_service()
+    s = hk(dictate=D.DEFAULTS["dictation_hotkey"])
+    R = 0x52
+    acts, kept = feed(s, (CTRL, True), (SHIFT, True), (R, True), (R, False), (SHIFT, False), (CTRL, False))
+    assert kept == [], "the R must still reach Windows, which owns Ctrl+Shift+R"
+    for name, action in acts:
+        svc.on_hotkey(name, action)
+    assert acts == [("dictate", "start"), ("dictate", "cancel")], acts
+    assert svc.state == "ready" and svc._jobs.qsize() == 0, svc.state
+
+
 def t_long_hold_still_types_on_release():
     svc = handsfree_service()
     svc.on_hotkey("dictate", "start")
@@ -819,6 +833,7 @@ check("a real hold shows the bubble after a moment; the mic starts at once", t_b
 check("tap the keys: hands-free until tapped again, then typed", t_tap_starts_handsfree_and_tap_again_types)
 check("holding the keys still types when let go", t_long_hold_still_types_on_release)
 check("a shortcut used during hands-free does not stop it", t_shortcut_during_handsfree_keeps_recording)
+check("Ctrl+Shift+R (screen recording) does not start hands-free dictation", t_screen_key_does_not_start_handsfree)
 check("Esc throws a hands-free recording away", t_escape_abandons_handsfree)
 check("settings: every change is checked before anything is saved", t_update_checks_everything_first)
 check("switching dictation off in Settings stops it at once", t_switch_off_while_running)
