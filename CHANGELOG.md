@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.6.1 — Updated add-on software (unreleased)
+
+### Changed
+- **Add-on software updated** to current versions (21 packages, small updates only). One of them, a tracing library the app carries, had a published fault that let a crafted request slow the app down; now fixed. No change to how Notewell looks or works.
+- Held back on purpose: the window toolkit (PySide6 stays 6.9.1), the video reader (av stays 18; 19 breaks transcription) and the speaker-separation library (sherpa-onnx stays 1.x; 2.0 is a big change). Each needs its own test run.
+
 ## 2.6.0 — Ctrl+Shift+R, and the screen tells you what is happening (unreleased)
 
 ### Changed
