@@ -1526,7 +1526,7 @@ def sound_test_verdict(levels, speaker_name):
         lines.append(f"{what}: " + ("silence." if isinstance(v, (int, float))
                                     else f"could not be opened ({str(v)[:80]})."))
         fixes.append("Turn the volume up, or pick the speakers or headset you use for calls"
-                     " under Audio source." if key == "call" else
+                     " under Listen to (right-click the Notewell icon)." if key == "call" else
                      "Check the microphone is not muted, and that Windows and Kaspersky"
                      " let Notewell use it.")
     return ok, "\n".join(lines + ([""] + fixes if fixes else ["", "Meetings will record both sides."]))

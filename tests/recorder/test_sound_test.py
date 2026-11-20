@@ -40,14 +40,14 @@ def t_silent_mic_fails_with_a_fix():
     assert not ok
     assert "Your microphone: silence." in text, text
     assert "not muted" in text and "Kaspersky" in text, text
-    assert "Audio source" not in text, text          # the speaker advice is not shown
+    assert "Listen to" not in text, text          # the speaker advice is not shown
 
 
 def t_silent_call_fails_with_a_fix():
     ok, text = R.sound_test_verdict({"call": 0.0, "mic": 0.05}, "Headset")
     assert not ok
     assert "Call sound on Headset: silence." in text, text
-    assert "Audio source" in text, text
+    assert "Listen to" in text, text
 
 
 def t_faint_is_still_heard():
@@ -70,7 +70,7 @@ def t_missing_side_is_not_called_heard():
 
 check("both sides heard: says so, and that meetings record both", t_both_heard)
 check("silent microphone: fails and says how to fix it", t_silent_mic_fails_with_a_fix)
-check("silent call sound: fails and points to Audio source", t_silent_call_fails_with_a_fix)
+check("silent call sound: fails and points to Listen to", t_silent_call_fails_with_a_fix)
 check("faint sound still counts as heard, flagged as quiet", t_faint_is_still_heard)
 check("a device that will not open is named", t_device_error_is_named)
 check("a side that never answered is not reported as heard", t_missing_side_is_not_called_heard)
