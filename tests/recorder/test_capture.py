@@ -220,7 +220,9 @@ def t_prune_removes_old_keeps_new():
         old, new = moved[0], moved[1]
         ancient = time.time() - 40 * 86400
         os.utime(old, (ancient, ancient))
-        removed = recorder.prune_archive({"archive_retention_days": 30})
+        recorder.note_sent(999, None, "s999", {"api_url": "http://far.test"})   # 2.7.0: only sent meetings clear
+        removed = recorder.prune_archive({"archive_retention_days": 30}, has_note=lambda e, c: True,
+                                         recycle=lambda ps: [p.unlink() or p for p in ps])
         assert removed == 1, f"pruned {removed}, expected 1"
         assert not old.exists() and new.exists()
 

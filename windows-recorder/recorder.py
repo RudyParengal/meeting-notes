@@ -21,6 +21,7 @@ import spool
 import logfiles
 import soundgaps
 import diarize as diarization
+import tidy
 from datetime import datetime, timezone
 
 # Where the recorder keeps its config, logs and in-progress audio.
@@ -86,7 +87,8 @@ DEFAULT_CONFIG = {
     "live_language": "en",                # forced; 8s is too short to detect reliably
     "live_window_topmost": True,
     "archive_backups": True,              # move backup WAVs to MeetingArchive after upload
-    "archive_retention_days": 30,         # clear archived WAVs older than this
+    "archive_retention_days": 7,          # clear archived WAVs and transcript copies older than this,
+                                          # once the server has the note (chunk 06 rule, 2.7.0)
 }
 
 # Where crash-resilient spools live, one directory per session.
@@ -102,6 +104,9 @@ SUPERVISOR_LAUNCHER = HERE / "start-supervisor.vbs"
 # (set by main(hooks=...)). The standalone tray app leaves it False.
 EMBEDDED = False
 ARCHIVE_ROOT = Path.home() / "MeetingArchive"
+# One line per meeting the server took: its audio and transcript copies and its note id,
+# so they are only cleared once the server has the note. No keys in it.
+SENT_LIST = "sent-meetings.jsonl"
 
 
 def _is_loopback(url: str) -> bool:
@@ -801,22 +806,96 @@ def archive_backups(paths, cfg):
     return moved
 
 
-def prune_archive(cfg):
-    """Delete archived WAVs older than the retention window."""
-    days = int(cfg.get("archive_retention_days", 30))
-    if days <= 0 or not ARCHIVE_ROOT.is_dir():
+def note_sent(stamp, transcript_path, session_id, sent_to):
+    """Remember which server note a meeting's audio (last_meeting_<stamp>_*.wav)
+    and transcript copy belong to. Never fatal: a meeting must still finish."""
+    try:
+        line = {"stamp": int(stamp), "transcript": Path(transcript_path).name if transcript_path else "",
+                "session_id": session_id, "server": sent_to.get("api_url", "").rstrip("/")}
+        with open(APPDIR / SENT_LIST, "a", encoding="utf-8") as f:
+            f.write(json.dumps(line) + "\n")
+    except Exception as e:
+        log.warning("could not add the meeting to %s: %s", SENT_LIST, e)
+
+
+def sent_meetings():
+    out = []
+    try:
+        lines = (APPDIR / SENT_LIST).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+def server_has_note(entry, cfg):
+    """True if the server that took the meeting has its finished note, False if it
+    says no, None if it cannot be asked (offline, signed out, a server no longer set)."""
+    import requests
+    server = entry.get("server", "")
+    keys = {cfg.get("api_url", "").rstrip("/"): cfg.get("api_key", ""),
+            (cfg.get("fallback_api_url") or "").rstrip("/"): cfg.get("fallback_api_key", "")}
+    if not server or server not in keys:
+        return None
+    try:
+        r = requests.get(f"{server}/results/{entry['session_id']}", headers={"X-API-Key": keys[server]},
+                         timeout=10, allow_redirects=False)
+    except Exception as e:
+        log.debug("could not ask %s about a note: %s", server, e)
+        return None
+    if r.status_code == 404:
+        return False
+    try:
+        return r.json().get("status") == "complete" if r.status_code == 200 else None
+    except ValueError:
+        return None
+
+
+def _older(path, cutoff):
+    try:
+        return path.stat().st_mtime < cutoff
+    except OSError:
+        return False
+
+
+def prune_archive(cfg, has_note=None, recycle=None):
+    """Clear a meeting's archived WAVs and transcript copy once they are older than
+    archive_retention_days AND the server has the meeting's note. If the server cannot
+    be asked, keep them and try after the next meeting. Files not in SENT_LIST (sent
+    before 2.7.0, or never sent) are kept. Cleared files go to the Recycle Bin."""
+    has_note, recycle = has_note or server_has_note, recycle or tidy.recycle
+    days = int(cfg.get("archive_retention_days", 7))
+    if days <= 0:
         return 0
     cutoff = time.time() - days * 86400
-    removed = 0
-    for wav in ARCHIVE_ROOT.glob("wav-*/*.wav"):
-        try:
-            if wav.stat().st_mtime < cutoff:
-                wav.unlink()
-                removed += 1
-        except OSError as e:
-            log.debug("prune skipped %s: %s", wav, e)
+    wavs = {}
+    if ARCHIVE_ROOT.is_dir():
+        for wav in ARCHIVE_ROOT.glob("wav-*/last_meeting_*_*.wav"):
+            wavs.setdefault(wav.name.split("_")[2], []).append(wav)
+    removed, waiting, unreachable = 0, 0, set()
+    for entry in sent_meetings():
+        files = list(wavs.get(str(entry.get("stamp")), []))
+        if entry.get("transcript"):
+            files.append(APPDIR / Path(entry["transcript"]).name)
+        old = [f for f in files if _older(f, cutoff)]
+        if not old or entry.get("server") in unreachable:
+            continue
+        answer = has_note(entry, cfg)
+        if answer is None:
+            unreachable.add(entry.get("server"))
+        elif answer:
+            removed += len(recycle(old))
+        else:
+            waiting += len(old)
     if removed:
-        log.info("Pruned %d archived wav(s) older than %d days", removed, days)
+        log.info("Cleared %d meeting file(s) older than %d days - the server has their notes", removed, days)
+    if waiting or unreachable:
+        log.info("Kept old meeting files: %d with no note on the server yet%s", waiting,
+                 ", and the server could not be asked" if unreachable else "")
     return removed
 
 
@@ -1046,8 +1125,9 @@ class MeetingManager:
                 mic_audio = None
 
             # Save raw audio to disk as a safety net in case transcription fails.
+            stamp = int(time.time())
             backup_paths = save_backup_wavs(
-                system_audio, mic_audio, self.cfg["sample_rate"])
+                system_audio, mic_audio, self.cfg["sample_rate"], stamp)
 
             self.notify("Transcribing...", f"Processing {int(duration//60)} min of audio locally. This may take 30s-2min.")
             t0 = time.time()
@@ -1067,6 +1147,7 @@ class MeetingManager:
                 return
 
             # Save transcript to disk as a safety net
+            txt_path = None
             try:
                 txt_path = APPDIR / f"last_transcript_{int(time.time())}.txt"
                 txt_path.write_text(transcript, encoding='utf-8')
@@ -1078,6 +1159,7 @@ class MeetingManager:
             try:
                 session_id, sent_to = deliver(transcript, duration, self.cfg)
                 log.info(f"Uploaded session: {session_id}")
+                note_sent(stamp, txt_path, session_id, sent_to)
                 # The transcript is safely on the server, so the raw audio no
                 # longer needs to sit in the roaming profile. Order matters:
                 # nothing is discarded until the upload has returned an id.
@@ -1211,7 +1293,8 @@ def recover_orphan(session_dir, cfg, notify):
 
     log.info("Recovering %s (%.1f min)", session_dir, duration / 60)
     notify("Recovering meeting", f"Transcribing {int(duration // 60)} min left by a crash.")
-    save_backup_wavs(system_audio, mic_audio, sr)
+    stamp = int(time.time())
+    backup_paths = save_backup_wavs(system_audio, mic_audio, sr, stamp)
     if cfg.get("dual_stream", True) and (system_audio is not None or mic_audio is not None):
         transcript = transcribe_dual(system_audio, mic_audio, cfg)
     else:
@@ -1220,9 +1303,15 @@ def recover_orphan(session_dir, cfg, notify):
         log.warning("recovered transcript too short - keeping the spool")
         notify("Nothing to recover", "No speech found in the unfinished recording.")
         return None
-    session_id, _ = deliver(transcript, duration, cfg)
+    session_id, sent_to = deliver(transcript, duration, cfg)
     log.info("Recovered session uploaded: %s", session_id)
+    note_sent(stamp, None, session_id, sent_to)
     spool.discard(session_dir)
+    try:                                   # as after any meeting: audio out of the roaming profile
+        archive_backups(backup_paths, cfg)
+        prune_archive(cfg)
+    except Exception as e:
+        log.warning("archive step failed: %s", e)
     notify("Meeting recovered", "The unfinished recording is on the dashboard.")
     return session_id
 

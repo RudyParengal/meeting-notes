@@ -215,6 +215,11 @@ def run() -> None:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     import soundgaps                              # sound card gaps: one log line a minute, not one each
     soundgaps.install()
+    import tidy                                   # each install copies 3 files first: keep the newest 2 copies
+    try:
+        tidy.trim_backups(HOME)
+    except Exception as e:
+        logging.warning("could not trim old backup copies: %s", e)
 
     import uvicorn
     server = importlib.import_module("main")     # backend/main.py

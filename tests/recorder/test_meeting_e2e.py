@@ -252,6 +252,8 @@ def t_meeting_becomes_a_note():
     assert n["duration_sec"] >= 53, n["duration_sec"]
     assert on_disk and not on_disk.exists(), "the recording on disk was not cleared after the upload"
     assert len(list(R.ARCHIVE_ROOT.glob("wav-*/*.wav"))) >= 2, "both tracks are kept in the archive"
+    listed = [e for e in R.sent_meetings() if e["session_id"] == SENT[-1]]
+    assert listed and R.server_has_note(listed[0], settings(R, PORT)) is True, "not on the sent list with its note"
     print(f"        note: {len(n['transcript'].splitlines())} lines, {n['duration_sec']} s")
 
 
@@ -291,7 +293,7 @@ def t_crash_mid_meeting_is_recovered():
         child.wait(10)
     orphans = R.spool.list_orphans(home / "spool")
     assert len(orphans) == 1, f"unfinished recordings found: {orphans}"
-    told = []
+    told, kept = [], len(list(R.ARCHIVE_ROOT.glob("wav-*/*.wav")))
     sid = R.recover_orphan(orphans[0], settings(R, PORT), lambda title, msg: told.append(title))
     assert sid and "Meeting recovered" in told, told
     n = complete(sid)
@@ -300,6 +302,8 @@ def t_crash_mid_meeting_is_recovered():
     late = [w for w in ("vans", "dealers", "goodbye") if w in n["transcript"].lower()]
     assert not late, f"words from after the crash: {late}"
     assert not orphans[0].exists(), "the recovered recording was not cleared"
+    assert len(list(R.ARCHIVE_ROOT.glob("wav-*/*.wav"))) == kept + 2, "the recovered tracks were not archived"
+    assert sid in [e["session_id"] for e in R.sent_meetings()], "the recovered meeting is not on the sent list"
     print(f"        killed at {CRASH_AT} s; recovered {n['duration_sec']} s into a note")
 
 
