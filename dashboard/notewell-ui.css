@@ -1,0 +1,290 @@
+/* notewell-ui.css - Notewell's one design system (chunk 07, 20 Nov 2026).
+   Same family as Workspace and abjak.com: warm off-white page, white cards, near-black main
+   button, one purple brand button per screen, 12px controls, 16px cards, visible focus ring.
+   The server copy (server/dashboard) and the app copy (app/dashboard) must stay identical:
+   run server/tools/check-ui-copy.py after any change. Plain CSS, no build step. */
+
+/* ---------- 1. Tokens: light ---------- */
+:root{
+  color-scheme:light;
+  --nw-font:"Segoe UI",system-ui,-apple-system,BlinkMacSystemFont,Roboto,"Helvetica Neue",Arial,sans-serif;
+  --nw-mono:ui-monospace,SFMono-Regular,"Cascadia Mono",Menlo,Consolas,monospace;
+  --nw-background:#F6F5F1; --nw-foreground:#121019;
+  --nw-card:#FFFFFF;       --nw-card-fg:#121019;
+  --nw-popover:#FFFFFF;    --nw-popover-fg:#121019;
+  --nw-sidebar:#FBFAF7;    --nw-sidebar-fg:#3D3A48;
+  --nw-sidebar-accent:#EEF0FF; --nw-sidebar-accent-fg:#32297D; --nw-sidebar-bar:#4A36B0;
+  --nw-border:rgba(20,18,30,.10);
+  --nw-input:rgba(50,41,125,.18);
+  --nw-muted:#EFEDE7;      --nw-muted-foreground:#5F5B6B;
+  --nw-primary:#121019;    --nw-primary-fg:#FFFFFF;   --nw-primary-hover:#2A2733;
+  --nw-brand:#4A36B0;      --nw-brand-fg:#FFFFFF;     --nw-brand-hover:#3E2C99;
+  --nw-link:#4A36B0;
+  --nw-secondary:#F2F1F6;  --nw-secondary-hover:#E9E7F0; --nw-secondary-fg:#3D3A48;
+  --nw-accent:#EEF0FF;     --nw-accent-fg:#32297D;
+  --nw-ring:#828CFF;
+  --nw-code:#F2F1F6;
+  --nw-destructive:#DC2626; --nw-destructive-fg:#B91C1C; --nw-destructive-soft:rgba(220,38,38,.08); --nw-destructive-edge:rgba(220,38,38,.36);
+  --nw-success:#10B981;     --nw-success-fg:#047857;     --nw-success-soft:rgba(16,185,129,.10);
+  --nw-warning:#F59E0B;     --nw-warning-fg:#975A16;     --nw-warning-soft:rgba(245,158,11,.12);
+  --nw-info:#5E5FC4;        --nw-info-fg:#4A36B0;        --nw-info-soft:rgba(94,95,196,.10);
+  --nw-r-sm:8px; --nw-r-md:10px; --nw-r-lg:12px; --nw-r-xl:16px;
+  --nw-shadow-card:0 1px 2px rgba(0,0,0,.05);
+  --nw-shadow-pop:0 10px 15px -3px rgba(0,0,0,.08),0 4px 6px -4px rgba(0,0,0,.06);
+  --nw-focus:0 0 0 2px var(--nw-background),0 0 0 4px var(--nw-ring);
+  /* Old Notewell names, so a page's own rules keep working while it moves over */
+  --bg:var(--nw-background); --panel:var(--nw-card); --border:var(--nw-border);
+  --text:var(--nw-foreground); --muted:var(--nw-muted-foreground); --accent:var(--nw-link);
+  --ok:var(--nw-success-fg); --warn:var(--nw-warning-fg); --bad:var(--nw-destructive-fg);
+}
+
+/* ---------- 2. Tokens: dark (follows the computer unless the page sets data-theme="light") ---------- */
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --nw-background:#0E0C15; --nw-foreground:#ECEAF3;
+    --nw-card:#17141F; --nw-card-fg:#ECEAF3; --nw-popover:#1C1926; --nw-popover-fg:#ECEAF3;
+    --nw-sidebar:#121019; --nw-sidebar-fg:#B9B5C6;
+    --nw-sidebar-accent:rgba(130,140,255,.14); --nw-sidebar-accent-fg:#ECEAF3; --nw-sidebar-bar:#A9B0FF;
+    --nw-border:rgba(236,234,243,.10); --nw-input:rgba(236,234,243,.16);
+    --nw-muted:#1F1B29; --nw-muted-foreground:#B9B5C6;
+    --nw-primary:#ECEAF3; --nw-primary-fg:#0E0C15; --nw-primary-hover:#D6D3E0;
+    --nw-brand:#5B47C7; --nw-brand-fg:#FFFFFF; --nw-brand-hover:#6A57D4; --nw-link:#A9B0FF;
+    --nw-secondary:rgba(236,234,243,.08); --nw-secondary-hover:rgba(236,234,243,.13); --nw-secondary-fg:#ECEAF3;
+    --nw-accent:rgba(130,140,255,.14); --nw-accent-fg:#ECEAF3;
+    --nw-code:#1F1B29;
+    --nw-destructive:#EF4444; --nw-destructive-fg:#F87171; --nw-destructive-soft:rgba(239,68,68,.16); --nw-destructive-edge:rgba(239,68,68,.40);
+    --nw-success:#10B981; --nw-success-fg:#34D399; --nw-success-soft:rgba(16,185,129,.16);
+    --nw-warning:#F59E0B; --nw-warning-fg:#FBBF24; --nw-warning-soft:rgba(245,158,11,.16);
+    --nw-info:#828CFF;    --nw-info-fg:#A9B0FF;    --nw-info-soft:rgba(130,140,255,.16);
+    --nw-shadow-card:none;
+    --nw-shadow-pop:0 10px 30px rgba(0,0,0,.45);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --nw-background:#0E0C15; --nw-foreground:#ECEAF3;
+  --nw-card:#17141F; --nw-card-fg:#ECEAF3; --nw-popover:#1C1926; --nw-popover-fg:#ECEAF3;
+  --nw-sidebar:#121019; --nw-sidebar-fg:#B9B5C6;
+  --nw-sidebar-accent:rgba(130,140,255,.14); --nw-sidebar-accent-fg:#ECEAF3; --nw-sidebar-bar:#A9B0FF;
+  --nw-border:rgba(236,234,243,.10); --nw-input:rgba(236,234,243,.16);
+  --nw-muted:#1F1B29; --nw-muted-foreground:#B9B5C6;
+  --nw-primary:#ECEAF3; --nw-primary-fg:#0E0C15; --nw-primary-hover:#D6D3E0;
+  --nw-brand:#5B47C7; --nw-brand-fg:#FFFFFF; --nw-brand-hover:#6A57D4; --nw-link:#A9B0FF;
+  --nw-secondary:rgba(236,234,243,.08); --nw-secondary-hover:rgba(236,234,243,.13); --nw-secondary-fg:#ECEAF3;
+  --nw-accent:rgba(130,140,255,.14); --nw-accent-fg:#ECEAF3;
+  --nw-code:#1F1B29;
+  --nw-destructive:#EF4444; --nw-destructive-fg:#F87171; --nw-destructive-soft:rgba(239,68,68,.16); --nw-destructive-edge:rgba(239,68,68,.40);
+  --nw-success:#10B981; --nw-success-fg:#34D399; --nw-success-soft:rgba(16,185,129,.16);
+  --nw-warning:#F59E0B; --nw-warning-fg:#FBBF24; --nw-warning-soft:rgba(245,158,11,.16);
+  --nw-info:#828CFF;    --nw-info-fg:#A9B0FF;    --nw-info-soft:rgba(130,140,255,.16);
+  --nw-shadow-card:none;
+  --nw-shadow-pop:0 10px 30px rgba(0,0,0,.45);
+}
+
+/* ---------- 3. Base ---------- */
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{margin:0;font-family:var(--nw-font);font-size:15px;line-height:1.55;color:var(--nw-foreground);
+  background:var(--nw-background);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+h1,h2,h3,h4{color:var(--nw-foreground);letter-spacing:-.02em;line-height:1.25;margin:0 0 8px}
+h1{font-size:22px;font-weight:600}
+h2{font-size:18px;font-weight:600}
+h3{font-size:16px;font-weight:600}
+p{margin:0 0 12px}
+a{color:var(--nw-link);text-underline-offset:2px}
+a:hover{text-decoration-thickness:2px}
+code,pre,kbd{font-family:var(--nw-mono);font-size:13px}
+pre{background:var(--nw-code);border:1px solid var(--nw-border);border-radius:var(--nw-r-lg);padding:12px 14px;
+  overflow:auto;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+hr{border:0;border-top:1px solid var(--nw-border);margin:24px 0}
+img,video{max-width:100%}
+::selection{background:rgba(130,140,255,.30)}
+*{scrollbar-width:thin;scrollbar-color:var(--nw-input) transparent}
+.muted,.nw-muted{color:var(--nw-muted-foreground)}
+.small{font-size:13px}
+.caption{font-size:12px;color:var(--nw-muted-foreground)}
+.mono{font-family:var(--nw-mono)}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.stack{display:flex;flex-direction:column;gap:12px}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.spacer{flex:1}
+
+/* ---------- 4. Focus: every control shows a clear ring when reached by keyboard ---------- */
+:focus{outline:none}
+:focus-visible{outline:2px solid var(--nw-ring);outline-offset:2px}
+button:focus-visible,.btn:focus-visible,[role=tab]:focus-visible,summary:focus-visible{outline:none;box-shadow:var(--nw-focus)}
+a:focus-visible{outline:2px solid var(--nw-ring);outline-offset:2px;border-radius:4px}
+
+/* ---------- 5. Brand mark (sign-in, set-password, devices, share) ---------- */
+.brand{display:inline-flex;align-items:center;gap:10px;font-weight:600;font-size:16px;letter-spacing:-.02em;
+  color:var(--nw-foreground);text-decoration:none}
+.brand-tile{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:var(--nw-r-sm);
+  background:var(--nw-brand);color:var(--nw-brand-fg);font-size:15px;font-weight:700;letter-spacing:0}
+
+/* ---------- 6. Buttons ----------
+   .btn alone = quiet outline button. Add one of: .btn-primary (near-black, the usual main action),
+   .btn-brand (purple, at most one per screen), .btn-secondary, .btn-ghost, .btn-danger (delete),
+   .btn-danger-solid (delete forever). Sizes: .btn-sm, .btn-lg, .btn-block, .btn-icon. */
+.btn{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  height:36px;padding:0 14px;border:1px solid var(--nw-input);border-radius:var(--nw-r-lg);
+  background:var(--nw-card);color:var(--nw-foreground);box-shadow:var(--nw-shadow-card);
+  font:500 14px/1 var(--nw-font);white-space:nowrap;text-decoration:none;cursor:pointer;
+  transition:background-color .15s,border-color .15s,box-shadow .15s,transform .1s}
+.btn:hover{background:var(--nw-secondary)}
+.btn:active{transform:scale(.98)}
+.btn:disabled,.btn[aria-disabled=true]{opacity:.55;cursor:default;pointer-events:none}
+.btn-primary{background:var(--nw-primary);border-color:var(--nw-primary);color:var(--nw-primary-fg)}
+.btn-primary:hover{background:var(--nw-primary-hover);border-color:var(--nw-primary-hover)}
+.btn-brand{background:var(--nw-brand);border-color:var(--nw-brand);color:var(--nw-brand-fg);
+  box-shadow:0 1px 2px rgba(74,54,176,.25),inset 0 1px rgba(255,255,255,.18)}
+.btn-brand:hover{background:var(--nw-brand-hover);border-color:var(--nw-brand-hover)}
+.btn-secondary{background:var(--nw-secondary);border-color:transparent;color:var(--nw-secondary-fg);box-shadow:none}
+.btn-secondary:hover{background:var(--nw-secondary-hover)}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--nw-foreground);box-shadow:none}
+.btn-ghost:hover{background:var(--nw-secondary)}
+.btn-danger{background:var(--nw-card);border-color:var(--nw-input);color:var(--nw-destructive-fg)}
+.btn-danger:hover{background:var(--nw-destructive-soft);border-color:var(--nw-destructive-edge)}
+.btn-danger-solid{background:var(--nw-destructive);border-color:var(--nw-destructive);color:#fff}
+.btn-danger-solid:hover{filter:brightness(.94)}
+.btn.is-on{background:var(--nw-accent);border-color:var(--nw-ring);color:var(--nw-accent-fg)}
+.btn-sm{height:30px;padding:0 10px;font-size:13px;border-radius:10px}
+.btn-lg{height:44px;padding:0 18px;font-size:15px}
+.btn-block{display:flex;width:100%}
+.btn-icon{width:36px;padding:0}
+.btn-sm.btn-icon{width:30px}
+@media (max-width:639px){.btn{height:40px;font-size:15px}.btn-sm{height:34px;font-size:14px}.btn-icon{width:40px}}
+@media (pointer:coarse){.btn{min-height:44px}.btn-icon{min-width:44px}}
+.btn-group{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+
+/* ---------- 7. Inputs, selects, text areas ----------
+   Plain <input>, <select> and <textarea> get this look by default; .input does the same on anything. */
+.input,
+input:not([type]),input[type=text],input[type=email],input[type=password],input[type=search],input[type=url],
+input[type=number],input[type=date],input[type=datetime-local],input[type=time],input[type=tel],
+select,textarea{
+  display:block;width:100%;height:36px;padding:0 12px;margin:0;border:1px solid var(--nw-input);
+  border-radius:var(--nw-r-lg);background:var(--nw-card);color:var(--nw-foreground);
+  font:400 14px/1.2 var(--nw-font);box-shadow:var(--nw-shadow-card);outline:none;
+  transition:border-color .15s,box-shadow .15s}
+textarea{height:auto;min-height:88px;padding:8px 12px;line-height:1.5;resize:vertical}
+select{padding-right:34px;appearance:none;-webkit-appearance:none;cursor:pointer;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237A7687' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 12px center}
+input::placeholder,textarea::placeholder,.input::placeholder{color:var(--nw-muted-foreground);opacity:.8}
+.input:focus,input:focus,select:focus,textarea:focus{border-color:var(--nw-ring);box-shadow:0 0 0 3px rgba(130,140,255,.28)}
+.input[aria-invalid=true],input[aria-invalid=true]{border-color:var(--nw-destructive-edge);box-shadow:0 0 0 3px var(--nw-destructive-soft)}
+.input:disabled,input:disabled,select:disabled,textarea:disabled{opacity:.6;cursor:not-allowed}
+input[type=search]::-webkit-search-cancel-button{cursor:pointer}
+input[type=checkbox],input[type=radio]{width:16px;height:16px;margin:0;accent-color:var(--nw-brand);cursor:pointer}
+.input-inline,select.input-inline{display:inline-block;width:auto}
+@media (max-width:639px){
+  .input,input:not([type]),input[type=text],input[type=email],input[type=password],input[type=search],input[type=url],
+  input[type=number],input[type=date],input[type=datetime-local],input[type=time],input[type=tel],select,textarea{height:44px;font-size:16px}
+  textarea{height:auto}}
+.field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+.label,label.label{font-size:13px;font-weight:500;color:var(--nw-foreground)}
+.hint{font-size:12px;color:var(--nw-muted-foreground)}
+
+/* ---------- 8. Cards ---------- */
+.card{background:var(--nw-card);color:var(--nw-card-fg);border:1px solid var(--nw-border);
+  border-radius:var(--nw-r-xl);box-shadow:var(--nw-shadow-card);padding:24px}
+.card-tight{padding:16px}
+.card-title{font-size:16px;font-weight:600;line-height:1.4;margin:0 0 4px}
+.card-desc{font-size:13px;color:var(--nw-muted-foreground);margin:0 0 16px}
+.card-footer{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-top:20px}
+@media (max-width:639px){.card{padding:18px}}
+
+/* ---------- 9. Lists and tables ---------- */
+.list{list-style:none;margin:0;padding:0;background:var(--nw-card);border:1px solid var(--nw-border);
+  border-radius:var(--nw-r-xl);overflow:hidden}
+.list-item{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--nw-border)}
+.list-item:last-child{border-bottom:0}
+.list-item-main{flex:1;min-width:0}
+.list-item-title{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.list-item-meta{font-size:13px;color:var(--nw-muted-foreground)}
+.table{width:100%;border-collapse:collapse;font-size:14px}
+.table th{height:40px;padding:0 12px;text-align:left;font-weight:500;font-size:13px;color:var(--nw-muted-foreground);
+  border-bottom:1px solid var(--nw-border);white-space:nowrap}
+.table td{padding:10px 12px;vertical-align:middle;border-bottom:1px solid var(--nw-border)}
+.table tbody tr:last-child td{border-bottom:0}
+.table tbody tr:hover{background:var(--nw-muted)}
+.table-wrap{overflow-x:auto;background:var(--nw-card);border:1px solid var(--nw-border);border-radius:var(--nw-r-xl)}
+
+/* ---------- 10. Tabs (muted track, white pill for the chosen one) ---------- */
+.tabs{display:flex;gap:2px;padding:3px;border-radius:var(--nw-r-lg);background:var(--nw-muted)}
+.tab{flex:1;min-width:0;height:32px;padding:0 10px;border:0;border-radius:10px;background:transparent;
+  color:var(--nw-muted-foreground);font:500 14px/1 var(--nw-font);cursor:pointer;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;transition:background-color .15s,color .15s}
+.tab:hover{color:var(--nw-foreground)}
+.tab[aria-selected=true],.tab.on{background:var(--nw-card);color:var(--nw-foreground);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+@media (pointer:coarse){.tab{min-height:44px}}
+
+/* ---------- 11. Badges and tag pills ---------- */
+.badge{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:var(--nw-r-sm);
+  border:1px solid transparent;background:var(--nw-secondary);color:var(--nw-secondary-fg);
+  font:500 12px/1 var(--nw-font);white-space:nowrap;vertical-align:middle}
+.badge-success{background:var(--nw-success-soft);color:var(--nw-success-fg)}
+.badge-warning{background:var(--nw-warning-soft);color:var(--nw-warning-fg)}
+.badge-error{background:var(--nw-destructive-soft);color:var(--nw-destructive-fg)}
+.badge-info{background:var(--nw-info-soft);color:var(--nw-info-fg)}
+.badge-outline{background:transparent;border-color:var(--nw-input);color:var(--nw-foreground)}
+button.badge{cursor:pointer}
+button.badge:hover{filter:brightness(.96)}
+
+/* ---------- 12. Banners (a line of news inside the page) ---------- */
+.banner{display:flex;gap:8px;align-items:flex-start;padding:10px 14px;border:1px solid var(--nw-border);
+  border-radius:var(--nw-r-lg);font-size:14px;background:var(--nw-card)}
+.banner:empty{display:none}
+.banner-info{background:var(--nw-info-soft);color:var(--nw-info-fg);border-color:transparent}
+.banner-success{background:var(--nw-success-soft);color:var(--nw-success-fg);border-color:transparent}
+.banner-warn{background:var(--nw-warning-soft);color:var(--nw-warning-fg);border-color:transparent}
+.banner-error{background:var(--nw-destructive-soft);color:var(--nw-destructive-fg);border-color:var(--nw-destructive-edge)}
+
+/* ---------- 13. Toasts (short news that goes away by itself; see notewell-ui.js) ---------- */
+.toast-region{position:fixed;z-index:60;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;
+  max-width:min(380px,calc(100vw - 32px));pointer-events:none}
+.toast{pointer-events:auto;display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:var(--nw-r-lg);
+  background:var(--nw-popover);color:var(--nw-popover-fg);border:1px solid var(--nw-border);
+  box-shadow:var(--nw-shadow-pop);font-size:14px;animation:nw-in .18s ease-out}
+.toast::before{content:"";flex:none;width:8px;height:8px;margin-top:6px;border-radius:99px;background:var(--nw-info)}
+.toast-success::before{background:var(--nw-success)}
+.toast-error::before{background:var(--nw-destructive)}
+.toast-error{border-color:var(--nw-destructive-edge)}
+@media (max-width:639px){.toast-region{left:16px;right:16px;max-width:none}}
+@keyframes nw-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* ---------- 14. Dialogs (a box over the page; a sheet from the bottom on phones) ---------- */
+.dialog-backdrop{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:16px;
+  background:rgba(14,12,21,.48);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+.dialog{width:100%;max-width:520px;max-height:calc(100vh - 32px);overflow:auto;background:var(--nw-popover);
+  color:var(--nw-popover-fg);border:1px solid var(--nw-border);border-radius:var(--nw-r-xl);box-shadow:var(--nw-shadow-pop);
+  animation:nw-in .18s ease-out}
+.dialog-wide{max-width:720px}
+.dialog-header{display:flex;align-items:center;gap:12px;padding:20px 24px 8px}
+.dialog-title{flex:1;font-size:17px;font-weight:600;margin:0}
+.dialog-body{padding:8px 24px 16px}
+.dialog-footer{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;padding:14px 24px;border-top:1px solid var(--nw-border)}
+@media (max-width:639px){
+  .dialog-backdrop{place-items:end stretch;padding:0}
+  .dialog{max-width:none;max-height:90vh;border-radius:16px 16px 0 0;border-bottom:0}
+  .dialog-header,.dialog-body,.dialog-footer{padding-left:18px;padding-right:18px}}
+
+/* ---------- 15. Empty, loading and error states ---------- */
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  padding:56px 24px;text-align:center;color:var(--nw-muted-foreground);font-size:14px}
+.empty-state strong,.empty-state .empty-title{display:block;color:var(--nw-foreground);font-weight:600;font-size:16px}
+.empty-state .btn{margin-top:10px}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid var(--nw-input);border-top-color:var(--nw-brand);
+  border-radius:50%;animation:nw-spin .8s linear infinite;vertical-align:middle}
+@keyframes nw-spin{to{transform:rotate(360deg)}}
+.skeleton{border-radius:var(--nw-r-sm);background:linear-gradient(90deg,var(--nw-muted) 25%,var(--nw-secondary-hover) 50%,var(--nw-muted) 75%);
+  background-size:200% 100%;animation:nw-sk 1.6s linear infinite}
+@keyframes nw-sk{to{background-position:-200% 0}}
+
+/* ---------- 16. Simple centred page (sign-in, set-password, share errors) ---------- */
+.page-center{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:32px 16px}
+.page-center>.card{width:100%;max-width:400px}
+.page-narrow{max-width:760px;margin:0 auto;padding:32px 16px 48px}
+
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
