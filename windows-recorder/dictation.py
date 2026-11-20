@@ -42,7 +42,9 @@ log = logging.getLogger("dictation")
 
 SR = 16000
 MIN_SECONDS = 0.3          # shorter than this is a key tapped by accident
-MAX_SECONDS = 300          # a key stuck down must not record forever
+MAX_SECONDS = 300          # keys held down: a key stuck down must not record forever
+HANDSFREE_SECONDS = 1200   # tapped (hands-free): up to 20 minutes, then it types what it heard
+WARN_SECONDS = 60          # the bubble says "1 minute left" this long before that
 TAP_SECONDS = 0.4          # keys let go sooner than this = a tap: keep listening (hands-free)
 SHOW_AFTER = 0.3           # the bubble waits this long, so Ctrl+Shift+T and the like never flash it
 ESC_VK = 0x1B
@@ -341,6 +343,7 @@ class Mic:
         self._chunks = []
         self._thread = None
         self.opened_after = None     # seconds from start() to the first sound arriving
+        self.max_seconds = MAX_SECONDS   # the service raises it for hands-free
 
     def start(self, on_live=None):
         """on_live() is called once, when the first sound arrives. Windows can take
@@ -355,6 +358,7 @@ class Mic:
                 import soundcard as sc
                 with sc.default_microphone().recorder(samplerate=SR, channels=1,
                                                       blocksize=soundgaps.blocksize(SR)) as rec:
+                    heard = 0
                     while not self._stop.is_set():
                         data = rec.record(numframes=SR // 20)
                         if self.opened_after is None:
@@ -362,7 +366,9 @@ class Mic:
                             if on_live:
                                 on_live()
                         self._chunks.append(data.reshape(-1).astype(np.float32))
-                        if sum(len(c) for c in self._chunks) > SR * MAX_SECONDS:
+                        heard += len(self._chunks[-1])
+                        if heard >= SR * self.max_seconds:
+                            log.info("dictation: microphone stopped at the %d-second limit", self.max_seconds)
                             break
             except Exception:
                 log.exception("the microphone could not be opened for dictation")
@@ -427,6 +433,9 @@ class DictationService:
         self._mic_wait = None           # seconds the microphone took to start, last dictation
         self.show_after = SHOW_AFTER
         self.tap_seconds = TAP_SECONDS
+        self.handsfree_seconds = HANDSFREE_SECONDS
+        self.warn_seconds = WARN_SECONDS
+        self._last_minute = False       # hands-free: "1 minute left" is showing
         self._handsfree = False         # tapped: listening until the keys are tapped again
         self._second_press = False      # the keys are down again during hands-free
         self._revealed = False          # the bubble is showing for this dictation
@@ -494,6 +503,7 @@ class DictationService:
     def _set_handsfree(self, on):
         self._handsfree = on
         self._second_press = False
+        self._last_minute = False
         if self._hook:
             self._hook.state.set_hotkeys(self._hotkeys())
 
@@ -580,6 +590,7 @@ class DictationService:
                 self.state = "listening"
                 self._revealed = self._live = False
             self.desktop.send_mask_key()       # stop Win (or Alt) on its own opening Start
+            self.mic.max_seconds = MAX_SECONDS  # keys held: the stuck-key guard
             self.mic.start(on_live=lambda: self._mic_live(press))   # at once, so no words are lost
             # The bubble waits a moment: Ctrl+Shift+T cancels before it would ever show.
             if self.show_after <= 0:
@@ -596,6 +607,7 @@ class DictationService:
             if action == "stop" and not self._handsfree \
                     and time.perf_counter() - self._t_start < self.tap_seconds:
                 self._set_handsfree(True)      # a tap: keep listening until the next tap
+                self._start_limit()
                 log.info("dictation: hands-free until %s is tapped again", self.cfg["dictation_hotkey"])
                 with self._lock:
                     self._revealed = True
@@ -611,6 +623,33 @@ class DictationService:
         elif name == "repaste" and action == "start":
             self.desktop.send_mask_key()
             self._jobs.put(("repaste", None, time.perf_counter()))
+
+    def _start_limit(self):
+        """Hands-free runs up to 20 minutes: a warning at 19, then it types what it heard."""
+        self.mic.max_seconds = self.handsfree_seconds + 5     # the timer ends it first
+        gone = time.perf_counter() - self._t_start
+        for wait, then in ((self.handsfree_seconds - self.warn_seconds, self._warn_last_minute),
+                           (self.handsfree_seconds, self._reach_limit)):
+            t = threading.Timer(max(0.0, wait - gone), then, (self._press,))
+            t.daemon = True
+            t.start()
+
+    def _warn_last_minute(self, press):
+        with self._lock:
+            if press == self._press and self.state == "listening" and self._handsfree:
+                self._last_minute = True
+                self._revealed = True
+                self.desktop.show("lastminute")
+                log.info("dictation: 1 minute of hands-free left")
+
+    def _reach_limit(self, press):
+        with self._lock:
+            if press != self._press or self.state != "listening" or not self._handsfree:
+                return
+            self.state = "writing"             # claimed: a tap at the same moment does nothing
+        log.info("dictation: hands-free reached its %d-minute limit; typing what was heard",
+                 self.handsfree_seconds // 60)
+        self._end(cancelled=False)
 
     def _end(self, cancelled):
         with self._lock:
@@ -630,6 +669,8 @@ class DictationService:
     def _bubble_state(self):
         if not self._live:
             return "waiting"                   # "Listening" only once sound really arrives
+        if self._handsfree and self._last_minute:
+            return "lastminute"
         return "handsfree" if self._handsfree else "listening"
 
     def _reveal(self, press):
@@ -1027,6 +1068,7 @@ if os.name == "nt":
         W_, H_ = 230, 40
         STYLES = {"waiting": ("Wait, mic starting...", 0x9A9A9A), "listening": ("Listening", 0x3C3CE8),
                   "handsfree": ("Listening - tap to stop", 0x3C3CE8),
+                  "lastminute": ("1 minute left", 0x3C3CE8),
                   "writing": ("Writing...", 0x2BA6F5)}
         # Windows keeps the window type for the life of the program, so it is registered
         # once, with one callback that finds the bubble it is for (dictation can be

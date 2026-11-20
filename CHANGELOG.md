@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.7.0 — Laptop fixes (unreleased)
+
+### Changed
+- **Hands-free dictation can run for 20 minutes** (was 5). At 19 minutes the badge says "1 minute left"; at 20 it types what it heard by itself, so nothing is lost. Holding the keys still stops after 5 minutes, in case a key is stuck down.
+- **The logs no longer fill up with sound card warnings.** Sound is now collected in half-second pieces instead of hundredths of a second, so a busy moment no longer drops sound, and any gaps are counted in one line a minute instead of one line each.
+- **Logs stay small.** notewell.log, recorder.log and screen.log each start a fresh file at 5 MB and keep the 3 newest old ones.
+
+### Added
+- `Notewell.exe --sound-check` records 2 minutes of a test tone and writes how many sound gaps it found to `sound-check.txt` in the Notewell folder.
+
 ## 2.6.1 — Updated add-on software (unreleased)
 
 ### Changed
