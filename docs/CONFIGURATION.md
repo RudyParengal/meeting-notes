@@ -130,9 +130,9 @@ The installer writes this file. After editing, right-click the tray icon → **Q
 | `diarize_threshold` / `diarize_min_talk_seconds` | `0.9` / `5` | Tuning: higher threshold = fewer, merged speakers. The library default split a two-person call into eight |
 | `live_transcript` | `false` | Show the always-on-top live window |
 | `live_model` | `base` | Small and quick model for the live text (the final transcript is unaffected) |
-| `auto_detect` | `false` | Start when a meeting app opens. **Off by default — see the recording-law note** |
-| `auto_detect_processes` | Zoom, Teams, Webex, Slack, Discord | Programs that count as "a meeting" |
-| `auto_detect_browser_meeting` | `true` | Also recognise meetings in browser tab titles (only used if `auto_detect` is on) |
+| `auto_detect` | `false` | Start when a meeting starts: a meeting app, or Google Meet, Teams or Zoom in a browser tab, using the microphone. **Off by default — see the recording-law note** |
+| `auto_detect_processes` | Zoom, Teams, Webex, Slack, Discord | Programs that count as "a meeting" while they use the microphone (just being open is not a meeting) |
+| `auto_detect_browser_meeting` | `true` | Also recognise Google Meet, Teams and Zoom in Chrome, Edge and other browsers: the tab title, while the browser uses the microphone (only used if `auto_detect` is on) |
 | `custom_vocabulary` | `[]` | Names and jargon to help the speech model, e.g. `["Acme", "Kubernetes"]` |
 | `meeting_type_default` | `auto` | `auto`, or force `client`, `sales`, `team`, `technical`, `investment`, `standup`, `interview`, `generic` |
 | `spool_enabled` | `true` | Write audio to disk as it is captured, so a crash loses nothing. Leave on |

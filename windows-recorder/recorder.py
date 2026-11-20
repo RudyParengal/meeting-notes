@@ -7,7 +7,7 @@ and sends the transcript to your Meeting Notes server.
 Tray icon menu:
   - Start Meeting          — begin capturing system audio
   - Stop Meeting           — end capture, transcribe, send to your server
-  - Auto-detect meetings   — toggle process-based auto-detection (Zoom, Teams, etc.)
+  - Auto-detect meetings   — start by itself when Zoom, Teams, Meet etc. (app or browser) use the mic
   - Open Dashboard         — open your server's dashboard in the browser
   - Settings               — edit config.json
   - Quit
@@ -53,7 +53,7 @@ DEFAULT_CONFIG = {
         "Zoom.exe", "Teams.exe", "ms-teams.exe", "zoom.exe",
         "webexmta.exe", "CiscoCollabHost.exe", "slack.exe", "discord.exe",
     ],
-    "auto_detect_browser_meeting": True,  # checks tab titles via accessibility API
+    "auto_detect_browser_meeting": True,  # Meet, Teams, Zoom in a browser tab (window title + browser using the mic)
     "auto_detect_debounce_seconds": 15,   # app must be active this long before auto-start
     "meeting_type_default": "auto",
     "notify_on_complete": True,
@@ -1103,12 +1103,25 @@ class MeetingManager:
 
 
 # -----------------------------------------------------------------
-# Auto-detection of meeting apps (polling every 10s)
+# Auto-detection of meetings (polling every 10s)
 # -----------------------------------------------------------------
+# The rule before 2.7.0, still used if Windows' microphone record cannot be read.
 _MEETING_WINDOW_KEYWORDS = [
     "zoom meeting", "microsoft teams", "google meet",
     "webex meeting", "cisco webex", "slack huddle",
     "discord call", "zoom webinar",
+]
+BROWSERS = {"chrome", "msedge", "firefox", "brave", "opera", "vivaldi", "comet", "arc"}
+# A meeting as its window title shows it, desktop app or browser tab (lower case).
+# Google Meet's tab is "Meet - abc-defg-hij", Teams' ends "| Microsoft Teams".
+_MEETING_TITLES = [
+    ("Google Meet", re.compile(r"\bmeet\s*[-–—|:]\s*[a-z]{3}-[a-z]{4}-[a-z]{3}\b"
+                               r"|google meet|meet\.google\.com")),
+    ("Teams", re.compile(r"microsoft teams|teams\.microsoft\.com|teams\.live\.com")),
+    ("Zoom", re.compile(r"\bzoom\b")),
+    ("Webex", re.compile(r"webex")),
+    ("Slack huddle", re.compile(r"\bhuddle\b")),
+    ("Discord", re.compile(r"discord")),
 ]
 
 
@@ -1262,57 +1275,140 @@ def heartbeat_loop(notify=None):
         time.sleep(30)
 
 
-def _check_window_titles():
-    """Check if any window title contains meeting keywords (Windows only)."""
+def _prog(name):
+    """One name per program, whichever way Windows spells it:
+    "ms-teams.exe", "MSTeams_8wekyb3d8bbwe" and "C:#...#ms-teams.exe" are all "msteams"."""
+    name = str(name or "").rsplit("#", 1)[-1].rsplit("\\", 1)[-1].lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    return name.split("_", 1)[0].replace("-", "")
+
+
+def mic_users(reg=None):
+    """Programs using the microphone right now, from Windows' own record (the one
+    behind "... is using your microphone"). None if it cannot be read."""
+    if reg is None:
+        try:
+            import winreg as reg
+        except ImportError:
+            return None
+    base = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
+    users = set()
     try:
-        import ctypes
-        import ctypes.wintypes
+        for path in (base, base + r"\NonPackaged"):
+            with reg.OpenKey(reg.HKEY_CURRENT_USER, path) as key:
+                i = 0
+                while True:
+                    try:
+                        app = reg.EnumKey(key, i)
+                    except OSError:
+                        break
+                    i += 1
+                    try:
+                        with reg.OpenKey(key, app) as k:
+                            start = reg.QueryValueEx(k, "LastUsedTimeStart")[0]
+                            stop = reg.QueryValueEx(k, "LastUsedTimeStop")[0]
+                    except OSError:
+                        continue                  # never used, or the NonPackaged folder itself
+                    if start and not stop:        # started and not stopped = using it now
+                        users.add(_prog(app))
+    except OSError as e:
+        log.debug("microphone record unreadable: %s", e)
+        return None
+    return users
 
-        EnumWindows = ctypes.windll.user32.EnumWindows
-        GetWindowTextW = ctypes.windll.user32.GetWindowTextW
-        GetWindowTextLengthW = ctypes.windll.user32.GetWindowTextLengthW
-        IsWindowVisible = ctypes.windll.user32.IsWindowVisible
 
-        titles = []
+def list_windows():
+    """([(program, title)] for every visible window with a title, {programs running})."""
+    import ctypes
+    import ctypes.wintypes
+    import psutil
+    names = {p.pid: p.info["name"] for p in psutil.process_iter(["name"])}
+    user32 = ctypes.windll.user32
+    found = []
 
-        def _callback(hwnd, _):
-            if IsWindowVisible(hwnd):
-                length = GetWindowTextLengthW(hwnd)
-                if length > 0:
-                    buf = ctypes.create_unicode_buffer(length + 1)
-                    GetWindowTextW(hwnd, buf, length + 1)
-                    titles.append(buf.value.lower())
-            return True
+    def _callback(hwnd, _):
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                pid = ctypes.wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                found.append((_prog(names.get(pid.value)), buf.value))
+        return True
 
-        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
-        EnumWindows(WNDENUMPROC(_callback), 0)
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+    user32.EnumWindows(WNDENUMPROC(_callback), 0)
+    return found, {_prog(n) for n in names.values()}
 
-        for title in titles:
+
+def find_meeting(windows, mic, running, cfg):
+    """The meeting that is on, as (program, what it is), or None.
+
+    windows: [(program, title)]; mic: programs using the microphone (None = cannot
+    tell); running: programs running. A meeting is a meeting app from
+    auto_detect_processes using the microphone, or any program (a browser tab
+    with Google Meet, Teams or Zoom on the web) whose window title is a meeting
+    while that same program uses the microphone. A title alone is not a call:
+    a Teams chat, the Meet home page or an email about a Zoom meeting are not.
+    """
+    apps = {_prog(n) for n in cfg.get("auto_detect_processes", [])}
+    browsers = cfg.get("auto_detect_browser_meeting", True)
+    if mic is None:                               # the rule before 2.7.0
+        for p in sorted(apps & running):
+            return p, p
+        for p, title in windows:
             for keyword in _MEETING_WINDOW_KEYWORDS:
-                if keyword in title:
-                    log.debug(f"Meeting window found: '{title}' matches '{keyword}'")
-                    return True
-    except Exception as e:
-        log.debug(f"Window title check failed: {e}")
-    return False
+                if keyword in title.lower():
+                    return p, keyword
+        return None
+    for p in sorted(apps & mic):
+        return p, p
+    for p, title in windows:
+        if p not in mic or (p in BROWSERS and not browsers):
+            continue
+        for label, pattern in _MEETING_TITLES:
+            if pattern.search(title.lower()):
+                return p, label + (" in " + p if p in BROWSERS else "")
+    return None
+
+
+class MeetingWatch:
+    """Is a meeting on? Remembers which program it was in, so it stays on while
+    that program keeps the microphone: the call's tab can go to the back of the
+    browser, which changes the window title, without stopping the recording."""
+
+    def __init__(self, look=None):
+        self.look = look or (lambda: list_windows() + (mic_users(),))
+        self.app = None
+
+    def __call__(self, cfg):
+        windows, running, mic = self.look()
+        found = find_meeting(windows, mic, running, cfg)
+        if found:
+            if found[0] != self.app:
+                log.info("Meeting found: %s", found[1])
+            self.app = found[0]
+            return found[1]
+        if self.app and mic and self.app in mic:
+            return self.app + " still using the microphone"
+        if self.app:
+            log.info("Meeting over: %s no longer has a meeting or the microphone", self.app)
+        self.app = None
+        return None
+
+
+_meeting_watch = MeetingWatch()
 
 
 def is_meeting_active(cfg):
-    """Return True if Zoom/Teams/etc. process is running or a meeting window is detected."""
+    """True while a meeting is on (see find_meeting)."""
     try:
-        import psutil
-        names = set(n.lower() for n in cfg.get("auto_detect_processes", []))
-        for p in psutil.process_iter(["name"]):
-            if p.info["name"] and p.info["name"].lower() in names:
-                return True
+        return bool(_meeting_watch(cfg))
     except Exception as e:
-        log.warning(f"process check failed: {e}")
-
-    # Also check window titles for meeting keywords
-    if _check_window_titles():
-        return True
-
-    return False
+        log.warning("meeting check failed: %s", e)
+        return False
 
 
 # -----------------------------------------------------------------

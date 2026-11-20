@@ -80,7 +80,7 @@ Programs started from some editors, terminals or desktop apps can end up in a sa
 
 ### Auto-detect didn't start (or started when I didn't want it)
 
-It is off unless you enable it (`-AutoDetect` at install, or the tray checkbox). When on, it needs the meeting app to be active for 15 seconds. Edit `auto_detect_processes` in `config.json` to add or remove programs.
+It is off unless you enable it (`-AutoDetect` at install, or the tray checkbox). When on, a meeting counts once it has been on for 15 seconds: a meeting app (`auto_detect_processes` in `config.json`) using the microphone, or a Google Meet, Teams or Zoom tab in the browser while the browser uses the microphone. Just having Teams or Zoom open is not a meeting. A browser meeting is recognised by the tab in front, so have the meeting tab in front when you join; after that you can switch tabs. It stops when the meeting app or browser lets go of the microphone. `recorder.log` says "Meeting found: ..." with what it saw.
 
 ### Antivirus flags it
 

@@ -15,7 +15,7 @@ You do not need to keep the meeting app in front, and it works with anything tha
 | Item | What it does |
 |---|---|
 | **Start Meeting / Stop Meeting** | Begin or end recording |
-| **Auto-detect meetings** | Tick to start automatically when a meeting app opens (off by default — see the recording-law note in the README) |
+| **Auto-detect meetings** | Tick to start automatically when a call starts: Zoom, Teams, Webex, Slack or Discord using the microphone, or Google Meet, Teams or Zoom in a Chrome or Edge tab (off by default — see the recording-law note in the README) |
 | **Live transcript window** | Show or hide the always-on-top window with the text as people speak |
 | **Test Audio (5s)** | Records 5 seconds and tells you whether sound was heard — use it before an important call |
 | **Audio Source** | Pick a specific speaker/headset if the default is wrong |
