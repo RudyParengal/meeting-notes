@@ -41,7 +41,7 @@ What changed since 2.6.1: the app now looks like the website, plus the laptop fi
 ## 2.5.0 — Record your screen and get a share link (2026-11-18)
 
 ### Added
-- **Press Ctrl+Alt+R to record your screen and your voice. Press it again to stop.** A few seconds later a link is on the clipboard and a notice says so. Anyone with the link can watch it on notes.parengal.com without an account. Also in the tray menu ("Record screen") and on the dashboard.
+- **Press Ctrl+Alt+R to record your screen and your voice. Press it again to stop.** A few seconds later a link is on the clipboard and a notice says so. Anyone with the link can watch it on your server's website without an account. Also in the tray menu ("Record screen") and on the dashboard.
 - **Two screens:** a small window asks which one. One screen: it records that one.
 - **No internet?** The recording waits on the laptop and goes up when the connection is back; the link is copied then.
 - **Notewell's own windows never appear in a recording** (this also hides the dictation badge from screen shares and screenshots).

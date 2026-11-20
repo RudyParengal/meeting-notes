@@ -1,12 +1,15 @@
 # Notewell
 
-**An AI note-taker that runs on your own computer.** It records your calls on Windows, turns the audio into text on your own machine, and writes a summary and a list of action items. No subscription, no sign-up, no meeting bot joining your calls.
+**Version 2.7.0.** A note-taker, a dictation tool and a screen recorder that run on your own computer. It records your calls on Windows, turns the audio into text on your own machine, and writes a summary and a list of action items. No subscription, no meeting bot joining your calls.
 
-- **Your audio never leaves your laptop.** Only the written transcript goes to the AI that writes the summary — and with a local model (Ollama), not even that.
+- **Meetings.** Records both sides of a call, labels "Me" and the other speakers, and writes the summary and action items. Starts by itself for Google Meet, Teams and Zoom if you switch that on.
+- **Dictation.** Hold **Ctrl+Shift** in any program and speak; the words are typed when you let go. Tap once for hands-free, up to 20 minutes.
+- **Screen recording with a link.** Press **Ctrl+Shift+R**, talk, press it again. A share link is copied for you.
+- **Phone.** A web page for your notes, memos and recordings, and an Android app with a floating button that types your dictation into any app.
+- **Your meeting audio stays on your laptop.** Only the written transcript goes to the AI that writes the summary, and with a local model (Ollama) not even that. **Screen recordings and phone memos are the exception:** they go to your own server (the one you link in Settings), so they can be shared and shown on your phone.
 - **Free to run.** Pick the free Mistral plan on the Settings screen, paste the key once, done. Or use OpenAI, Claude, Grok, Groq, Ollama or any OpenAI-compatible service.
-- **Knows who said what.** Your voice is labelled "Me"; everyone else is split into Speaker 1, 2, 3 — on your computer.
 - **Survives crashes.** Audio is saved to disk while you talk. If the laptop dies mid-call, the recording is recovered on the next start.
-- **Edit, tag, search and export** every note — Markdown, plain text or PDF.
+- **Edit, tag, search and export** every note: Markdown, plain text or PDF.
 
 > **Recording laws.** In many places you must tell people a call is being recorded. Notewell shows a reminder on the Record screen. Telling people is your responsibility.
 
@@ -27,6 +30,8 @@
 | About 2 GB of free disk | the app plus the speech model |
 | 8 GB of memory | recommended; on a slower PC pick the "Base" speech model in Settings |
 | Internet | once for the speech model, then only to reach your AI |
+
+**Link your own server (optional).** In Settings, **Your account**, sign in to your own Notewell server. Notes, dictation history and screen recordings then show on the website and the phone, and screen recordings get share links.
 
 **Where things live:** your meetings are in `%USERPROFILE%\Notewell`. Uninstalling (Settings → Apps → Notewell) leaves them there.
 

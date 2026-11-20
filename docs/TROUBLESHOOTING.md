@@ -150,6 +150,32 @@ Status `unhealthy` or `Exited (78)`: read the log — it names the setting to fi
 
 ---
 
+## Linked server, dictation and screen recording
+
+### The app says it is not signed in, or a recording is "Saved on this PC"
+- Open Settings, **Your account**, and sign in again. The recording uploads by itself afterwards and the link is copied then.
+- Recordings waiting to go up are in `%USERPROFILE%\Notewell\screen\outbox`. Do not delete them.
+- If sign-in says "too many tries", wait 15 minutes. Five wrong passwords in a row lock the account for that long.
+
+### Dictation types nothing
+- Check that Settings, **Dictation**, is on and no other program uses the same keys.
+- Password boxes and password managers are never typed into, on purpose. The words are in **Dictation history**.
+- Hands-free stops itself at 20 minutes and types what it heard. Holding the keys stops at 5 minutes.
+- Press **Alt+Shift+V** to paste the last dictation again.
+
+### Ctrl+Shift+R does nothing, or reloads a web page
+- Ctrl+Shift+R is the screen recording key while Notewell runs. Use **Ctrl+F5** for a hard reload in Chrome or Edge, or choose other keys with `screen_hotkey` in `recorder\config.json`.
+- Another program may already hold the keys. `screen.log` in `%USERPROFILE%\Notewell` says what happened.
+
+### A meeting was not recorded by itself
+- Auto-detect is off until you switch it on. It needs the meeting app or browser tab and the microphone in use at the same time. An open Teams or Zoom window alone is not a meeting.
+
+### Which version is installed
+- The bottom of **Settings** and the tray tooltip show it, for example "Notewell 2.7.0".
+
+### Going back to an older version
+- Close Notewell from the tray, then run the older installer from the releases page. Your notes and settings stay.
+
 ## Still stuck?
 
 Run `python scripts/doctor.py --e2e --json` and open an issue with the output and the last 30 lines of the relevant log. **First read both for anything secret.** The doctor and the logs avoid printing keys, but transcripts can contain private conversations.

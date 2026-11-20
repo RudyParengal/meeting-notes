@@ -1,4 +1,4 @@
-# Using Meeting Notes
+# Using Notewell
 
 ## Recording a meeting
 

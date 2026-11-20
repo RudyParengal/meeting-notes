@@ -141,7 +141,8 @@ The installer writes this file. After editing, right-click the tray icon → **Q
 | `silence_alert_seconds` | `10` | Warn if the call has been silent this long |
 | `auto_stop_silence_minutes` | `15` | Stop a forgotten recording after this many minutes with no sound; `0` = never |
 | `archive_backups` | `true` | After a note is safely stored, move the backup audio to `%USERPROFILE%\MeetingArchive` |
-| `archive_retention_days` | `30` | Archived audio older than this is cleared automatically |
+| `archive_retention_days` | `7` | Archived audio and transcript copies older than this go to the Recycle Bin, but only once your linked server has the finished note. Nothing is cleared if the server cannot be reached |
+| `screen_hotkey` | `ctrl+shift+r` | Keys that start and stop a screen recording |
 | `dictation_enabled` | `true` | Hold-to-talk dictation in the Windows app. `false` = the keys do nothing and the microphone is never opened for it |
 | `dictation_hotkey` | `ctrl+shift` | Hold to talk, let go to type; or tap once for hands-free and tap again to type (Esc cancels) |
 | `dictation_repaste_hotkey` | `alt+shift+v` | Paste the last dictation again |

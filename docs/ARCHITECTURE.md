@@ -33,6 +33,24 @@ Both use the same code. The Windows app is `desktop/notewell.py`, which starts t
 
 If the AI step fails (no key, provider down), the transcript is still saved and **Generate** in the dashboard runs the AI step again.
 
+## Linked server, accounts and the phone (2.7.0)
+
+The Windows app can be linked to a Notewell server of your own. Meetings do not need it, but dictation history, screen recordings, the website and the phone all do.
+
+| Part | What it does |
+|---|---|
+| **Account** | You sign in once in Settings. Passwords are set through a one-time link. Five wrong passwords in a row lock the account for 15 minutes |
+| **Device pass** | Each laptop or phone gets its own pass when you sign in. Switching a device off on the website's Devices page stops it at once |
+| **Meetings** | Audio is turned into text on the laptop. Only the transcript goes to the server, which writes the summary and action items |
+| **Dictation** | Runs on the laptop (`windows-recorder/dictation.py`, a small speech model). The history syncs to the server later. Words are not sent anywhere else unless you switch tidy-up on |
+| **Screen recording** | `windows-recorder/screen_record.py` records the screen and microphone, waits in `screen\outbox` if there is no internet, uploads, and copies a share link. Share links work without an account and can be switched off |
+| **Sync** | Every device asks the server for changes every 5 seconds and redraws only when something changed |
+| **Phone** | A web page on the same server (`/m/`) with the same look and filters as the website, plus an Android app with a floating bubble that types your dictation into any app |
+
+What leaves the laptop, in plain words: meeting transcripts, screen recordings and phone memos go to your own server. Meeting audio does not.
+
+The app sends its version with every request, so the server can tell which version each laptop runs.
+
 ## The folders
 
 | Folder | What is in it |
