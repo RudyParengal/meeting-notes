@@ -103,7 +103,7 @@ def t_default_is_ctrl_shift():
     # Ctrl+Shift+Right selects a word: dictation stops at once and Right still reaches Windows
     acts, kept = feed(s, (CTRL, True), (SHIFT, True), (RIGHT, True), (RIGHT, False),
                       (SHIFT, False), (CTRL, False))
-    assert acts == [("dictate", "start"), ("dictate", "cancel")] and kept == [], (acts, kept)
+    assert acts == [("dictate", "start"), ("dictate", "cancel"), ("dictate", "stop")] and kept == [], (acts, kept)
     # Alt+Shift+V (type the last one again) does not set off dictation
     acts, _ = feed(s, (ALT, True), (SHIFT, True), (V, True), (V, False), (SHIFT, False), (ALT, False))
     assert acts == [("repaste", "start"), ("repaste", "stop")], acts
@@ -112,7 +112,7 @@ def t_default_is_ctrl_shift():
 def t_cancel_on_other_key():
     s = hk(dictate="ctrl+win")
     acts, kept = feed(s, (CTRL, True), (WIN, True), (RIGHT, True), (RIGHT, False), (WIN, False))
-    assert acts == [("dictate", "start"), ("dictate", "cancel")], acts
+    assert acts == [("dictate", "start"), ("dictate", "cancel"), ("dictate", "stop")], acts
     assert kept == [], "the other key must still reach Windows"
 
 
@@ -345,7 +345,7 @@ def t_screen_key_does_not_start_handsfree():
     assert kept == [], "the R must still reach Windows, which owns Ctrl+Shift+R"
     for name, action in acts:
         svc.on_hotkey(name, action)
-    assert acts == [("dictate", "start"), ("dictate", "cancel")], acts
+    assert acts == [("dictate", "start"), ("dictate", "cancel"), ("dictate", "stop")], acts
     assert svc.state == "ready" and svc._jobs.qsize() == 0, svc.state
 
 

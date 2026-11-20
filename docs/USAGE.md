@@ -41,6 +41,8 @@ If the recorder hears silence for 10 seconds it warns you — usually the wrong 
 2. Hold **Ctrl+Shift** and speak. A small "listening" badge shows at the bottom of the screen.
 3. Let go. The text appears at the cursor, usually within a second.
 
+Ctrl+Shift shortcuts (Ctrl+Shift+T, Ctrl+Shift+V and the like) still work: a key pressed within a second of Ctrl+Shift is treated as a shortcut, and nothing is recorded. Once you have been holding for a second, another key (a stray press, the volume) does not lose your words; let go of Ctrl+Shift as usual and it types. **Esc** while holding throws it away.
+
 **Hands-free:** tap **Ctrl+Shift** once (press and let go quickly) instead of holding it. The badge says "Listening - tap to stop". Speak for up to 20 minutes, then tap **Ctrl+Shift** again to type it. At 19 minutes the badge says "1 minute left"; at 20 it types what it heard by itself, so nothing is lost. (Holding the keys stops listening after 5 minutes, in case a key is stuck down.) **Esc** throws it away. Shortcuts such as Ctrl+Shift+T still work while it listens and do not stop it.
 
 - **Wrong window?** Press **Alt+Shift+V** to paste the last dictation again.

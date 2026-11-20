@@ -4,6 +4,7 @@
 
 ### Changed
 - **Hands-free dictation can run for 20 minutes** (was 5). At 19 minutes the badge says "1 minute left"; at 20 it types what it heard by itself, so nothing is lost. Holding the keys still stops after 5 minutes, in case a key is stuck down.
+- **A stray key no longer throws a dictation away.** Before, any other key pressed while holding Ctrl+Shift cancelled it, so a slip or Ctrl+Shift+V lost everything said. Now a key within the first second is still a shortcut (Ctrl+Shift+T works as before); after that the dictation carries on and types when you let go. Esc still throws it away. The log names the key that did it.
 - **The logs no longer fill up with sound card warnings.** Sound is now collected in half-second pieces instead of hundredths of a second, so a busy moment no longer drops sound, and any gaps are counted in one line a minute instead of one line each.
 - **Logs stay small.** notewell.log, recorder.log and screen.log each start a fresh file at 5 MB and keep the 3 newest old ones.
 

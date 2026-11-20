@@ -47,6 +47,9 @@ HANDSFREE_SECONDS = 1200   # tapped (hands-free): up to 20 minutes, then it type
 WARN_SECONDS = 60          # the bubble says "1 minute left" this long before that
 TAP_SECONDS = 0.4          # keys let go sooner than this = a tap: keep listening (hands-free)
 SHOW_AFTER = 0.3           # the bubble waits this long, so Ctrl+Shift+T and the like never flash it
+SHORTCUT_SECONDS = 1.0     # another key this soon after the keys went down = a shortcut such as
+                           # Ctrl+Shift+T: the microphone closes. Later, the person is dictating
+                           # and a stray key (Ctrl+Shift+V, volume) must not throw the words away
 ESC_VK = 0x1B
 QUIET_RMS = 0.001          # loudest moments below this = a silent room or a dead mic. Only
                            # that: 0.004 dropped Rudy's normal voice on the built-in mic
@@ -140,14 +143,31 @@ def parse_hotkey(text):
     return normal, keys
 
 
+KEY_NAMES = {0x08: "Backspace", 0x09: "Tab", 0x0D: "Enter", 0x1B: "Esc", 0x2E: "Delete",
+             0x25: "Left", 0x26: "Up", 0x27: "Right", 0x28: "Down", 0xAD: "Mute",
+             0xAE: "Volume down", 0xAF: "Volume up", **{v: k.title() for k, v in NAMED.items()}}
+
+
+def key_name(vk):
+    """0x54 -> 'T', for the log line that says which key ended a dictation."""
+    if vk is None:
+        return "another key"
+    if 0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A:
+        return chr(vk)
+    if 0x70 <= vk <= 0x87:
+        return f"F{vk - 0x6F}"
+    return KEY_NAMES.get(vk, f"key {vk:#04x}")
+
+
 class HotkeyState:
     """Turns key presses into 'start', 'stop' and 'cancel' for each named hotkey.
 
     - A hotkey starts when exactly its keys are held: Ctrl+Shift+Win does not set
       off Ctrl+Win, so other shortcuts keep working.
     - It stops when any of its keys is let go.
-    - It is cancelled if another key is pressed while it is held (the person was
-      using a Windows shortcut such as Ctrl+Win+Right, not dictating).
+    - Another key pressed while it is held gives 'cancel' once (maybe a shortcut such
+      as Ctrl+Shift+T, not dictation). It stays held, so letting go still gives
+      'stop': the service decides whether the key really ended it.
     - Ctrl, Alt, Shift and Win always reach Windows. A letter or other key that is
       part of a hotkey (the V of Alt+Shift+V) is kept back, so it is not typed.
     `is_down(vk)` lets the real keyboard correct a key whose release was missed.
@@ -165,7 +185,8 @@ class HotkeyState:
         for name, keys in hotkeys.items():
             if keys:
                 allvk = frozenset().union(*keys)
-                new[name] = {"keys": keys, "all": allvk, "trigger": allvk - MODIFIER_VKS, "active": False}
+                new[name] = {"keys": keys, "all": allvk, "trigger": allvk - MODIFIER_VKS,
+                             "active": False, "other": False}
         self.hotkeys = new
 
     def _matches(self, hk):
@@ -181,12 +202,13 @@ class HotkeyState:
             for name, hk in self.hotkeys.items():
                 if hk["active"]:
                     if vk not in hk["all"]:
-                        hk["active"] = False
-                        actions.append((name, "cancel"))
+                        if not hk["other"]:
+                            hk["other"] = True
+                            actions.append((name, "cancel"))
                     elif vk in hk["trigger"]:
                         swallow = True
                 elif not repeat and self._matches(hk):
-                    hk["active"] = True
+                    hk["active"], hk["other"] = True, False
                     actions.append((name, "start"))
                     if vk in hk["trigger"]:
                         swallow = True
@@ -433,6 +455,7 @@ class DictationService:
         self._mic_wait = None           # seconds the microphone took to start, last dictation
         self.show_after = SHOW_AFTER
         self.tap_seconds = TAP_SECONDS
+        self.shortcut_seconds = SHORTCUT_SECONDS
         self.handsfree_seconds = HANDSFREE_SECONDS
         self.warn_seconds = WARN_SECONDS
         self._last_minute = False       # hands-free: "1 minute left" is showing
@@ -575,8 +598,9 @@ class DictationService:
             return None
 
     # ---- what the keys do ----
-    def on_hotkey(self, name, action):
-        """Called for each hotkey start / stop / cancel (never on the hook itself)."""
+    def on_hotkey(self, name, action, key=None):
+        """Called for each hotkey start / stop / cancel (never on the hook itself).
+        `key` is the other key that gave a 'cancel'."""
         if name == "dictate" and action == "start":
             if self.state == "listening":
                 if self._handsfree:            # the second tap; it ends when the keys are let go
@@ -599,6 +623,10 @@ class DictationService:
                 threading.Timer(self.show_after, self._reveal, (press,)).start()
         elif name == "dictate" and action == "cancel" and self._handsfree:
             self._second_press = False         # a shortcut used while hands-free: keep listening
+        elif name == "dictate" and action == "cancel" and key != ESC_VK and self.state == "listening" \
+                and time.perf_counter() - self._t_start >= self.shortcut_seconds:
+            # Held a while: the person is dictating. Letting go types it as usual.
+            log.info("dictation: %s pressed while dictating; still listening", key_name(key))
         elif name == "dictate" and action in ("stop", "cancel"):
             if self.state != "listening":
                 return
@@ -614,7 +642,7 @@ class DictationService:
                     self.desktop.show("handsfree" if self._live else "waiting")
                 return
             if action == "cancel":
-                log.info("dictation cancelled: another key was pressed with the shortcut")
+                log.info("dictation cancelled: %s was pressed with the shortcut", key_name(key))
             self._end(cancelled=action == "cancel")
         elif name == "abandon" and action == "start":
             if self.state == "listening" and self._handsfree:
@@ -1272,7 +1300,7 @@ if os.name == "nt":
                     if not ours and (self.accept_injected or not k.flags & LLKHF_INJECTED):
                         actions, swallow = self.state.event(k.vkCode, wp in (WM_KEYDOWN, WM_SYSKEYDOWN))
                         for a in actions:
-                            self._actions.put(a)
+                            self._actions.put(a + (k.vkCode,) if a[1] == "cancel" else a)
                         if swallow:
                             return 1
             except Exception:
