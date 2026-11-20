@@ -142,7 +142,7 @@ table.users { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8
 table.users th, table.users td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: left }
 .steps { display: flex; gap: 8px; margin: 10px 0 4px; flex-wrap: wrap }
 .steps span { font-size: 12px; color: var(--muted) }
-.steps b { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--nw-brand); color: var(--nw-brand-fg); font-size: 11px; margin-right: 4px }
+.steps b { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--nw-brand); color: var(--nw-brand-fg); font-size: 12px; margin-right: 4px }
 
 /* ---------- sign in ---------- */
 .gate { max-width: 380px; margin: 12vh auto; padding: 28px }
@@ -173,3 +173,6 @@ table.users th, table.users td { padding: 7px 8px; border-bottom: 1px solid var(
     --nw-foreground: #000; --nw-muted-foreground: #444; --nw-border: #ccc; --nw-link: #1f3fbf; --nw-background: #fff; --nw-card: #fff }
   body.printing #print-area { display: block; font-size: 12pt; line-height: 1.5 }
 }
+/* Small buttons stay at least 32px tall so Move to trash / Delete forever are easy to hit */
+.btn.btn-sm { height: 32px }
+.empty-list .empty-state { padding: 16px 8px }

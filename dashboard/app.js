@@ -115,7 +115,7 @@ async function api(path, opts) {
 
 async function errorText(res) {
   var d = await res.json().catch(function() { return {}; });
-  return detailText(d.detail) || ('error ' + res.status);
+  return detailText(d.detail) || 'Something went wrong. Please try again.';
 }
 
 // --- dates and durations ------------------------------------------------------
@@ -164,7 +164,7 @@ async function doLogin() {
     currentUser = data;
     localStorage.setItem(TOKEN_STORAGE, sessionToken);
     start();
-  } catch (e) { errEl.textContent = 'Could not sign in: ' + e.message; }
+  } catch (e) { errEl.textContent = 'Could not sign in. Check that Notewell is still running and try again.'; }
 }
 
 async function doLogout() {
@@ -293,7 +293,7 @@ function renderNav() {
   if (!nav) return;
   nav.innerHTML = '';
   var item = function(id, label, extra) {
-    return h('button', { class: view === id ? 'on' : '', onclick: function() { go(id); } }, label, extra);
+    return h('button', { class: view === id ? 'on' : '', 'aria-current': view === id ? 'page' : null, onclick: function() { go(id); } }, label, extra);
   };
   nav.appendChild(item('home', 'Home'));
   if (isAdmin() && rec) nav.appendChild(item('dictation', 'Dictation'));
@@ -320,7 +320,7 @@ function renderTagBar() {
       tabindex: 0, role: 'button', 'aria-pressed': tagFilter === t ? 'true' : 'false',
       onclick: function() { tagFilter = tagFilter === t ? null : t; renderTagBar(); loadSessions(); },
       onkeydown: keyClick(function() { tagFilter = tagFilter === t ? null : t; renderTagBar(); loadSessions(); })
-    }, t));
+    }, (tagFilter === t ? '✓ ' : '') + t));
   });
 }
 
@@ -340,7 +340,14 @@ async function loadSessions() {
     renderList();
     if (view === 'home') renderRecent();
     if (view === 'trash') renderTrash(trashed);
-  } catch (e) { if (e.message !== 'auth') console.error(e); }
+  } catch (e) {
+    if (e.message === 'auth') return;
+    console.error(e);
+    var again = function() { loadSessions(); };
+    var msg = 'Could not load your meetings. Check the connection and try again.';
+    var spots = [$('list'), view === 'home' ? $('recent') : null, view === 'trash' ? $('trash-page') : null];
+    spots.forEach(function(box) { if (box) { box.innerHTML = ''; box.appendChild(nwErrorBanner(msg, again)); } });
+  }
 }
 
 function statusPill(s) {
@@ -366,8 +373,14 @@ function renderList() {
   if (!list) return;
   list.innerHTML = '';
   if (!sessions.length) {
-    list.appendChild(h('div', { class: 'empty-list' },
-      search || tagFilter ? 'Nothing matches.' : 'No meetings yet.' + (rec ? ' Press Record to start one.' : '')));
+    var filtered = search || tagFilter;
+    list.appendChild(h('div', { class: 'empty-list' }, filtered
+      ? nwEmpty('Nothing matches', 'Try another word, or clear the search and the tag.', 'Clear search', function() {
+          search = ''; tagFilter = null;
+          var box = $('search'); if (box) box.value = '';
+          renderTagBar(); loadSessions(); })
+      : nwEmpty('No meetings yet', rec ? 'Your meetings will be listed here.' : 'Meetings sent to this server will be listed here.',
+          rec ? 'Record a meeting' : null, function() { go('home'); startRecording(); })));
     return;
   }
   var last = null;
@@ -429,7 +442,11 @@ function renderRecent() {
   var box = $('recent');
   if (!box) return;
   box.innerHTML = '';
-  if (!sessions.length) { box.appendChild(h('p', { class: 'dim' }, 'Nothing yet. Your meetings appear here as soon as they are recorded.')); return; }
+  if (!sessions.length) {
+    box.appendChild(nwEmpty('No meetings yet', 'Your meetings appear here as soon as they are recorded.',
+      rec ? 'Record a meeting' : null, function() { startRecording(); }));
+    return;
+  }
   sessions.slice(0, 8).forEach(function(s) {
     box.appendChild(meetingRow(s, function() { openMeeting(s.session_id); }));
   });
@@ -520,9 +537,18 @@ function deviceSelect() {
     sel.value = rec.settings.audio_source;
   };
   fill();
-  if (!devices) api('/recorder/devices').then(function(r) { return r.json(); })
-    .then(function(d) { devices = d.devices || []; fill(); }).catch(function() {});
-  return sel;
+  var wrap = h('div', {}, sel);
+  var load = function() {
+    api('/recorder/devices').then(function(r) { if (!r.ok) throw new Error('bad'); return r.json(); })
+      .then(function(d) { devices = d.devices || []; fill(); var old = wrap.querySelector('.banner'); if (old) old.remove(); })
+      .catch(function(e) {
+        if (e.message === 'auth') return;
+        sel.innerHTML = ''; sel.appendChild(h('option', { value: '' }, 'Could not list the sound sources'));
+        if (!wrap.querySelector('.banner')) wrap.appendChild(nwErrorBanner('Could not load the list of sound sources. Check the connection and try again.', load));
+      });
+  };
+  if (!devices) load();
+  return wrap;
 }
 
 var LANGUAGES = [['', 'Detect automatically'], ['en', 'English'], ['de', 'German'], ['fr', 'French'], ['es', 'Spanish'],
@@ -602,13 +628,17 @@ async function openMeeting(id, fromTrash) {
   var r = await api(fromTrash ? '/trash/' + id : '/results/' + id);
   if (activeId !== id) return;
   var main = $('main');
-  if (!r.ok) { main.innerHTML = ''; main.appendChild(h('div', { class: 'page' }, h('p', { class: 'dim' }, 'This meeting could not be loaded.'))); return; }
+  if (!r.ok) {
+    main.innerHTML = '';
+    main.appendChild(h('div', { class: 'page' }, nwErrorBanner('Could not open this meeting. Check the connection and try again.', function() { openMeeting(id, fromTrash); })));
+    return;
+  }
   activeData = await r.json();
   activeData.session_id = activeData.session_id || id;
   renderMeeting(fromTrash);
   // While the AI is writing, check every 3 seconds and redraw once it is done.
   if (!fromTrash && (activeData.status === 'processing' || activeData.status === 'transcribing')) {
-    setTimeout(function() { if (activeId === id && view === 'meeting') openMeeting(id); }, 3000);
+    setTimeout(function() { if (activeId === id && view === 'meeting') openMeeting(id).catch(function() {}); }, 3000);
   }
 }
 
@@ -631,12 +661,12 @@ function renderMeeting(fromTrash, editing) {
       fromTrash ? null : tagEditor(d)),
     fromTrash ? h('div', { class: 'row' },
         h('button', { class: 'btn btn-primary', onclick: function() { restore(id); } }, 'Restore'),
-        h('button', { class: 'btn btn-danger', onclick: function() { purge(id); } }, 'Delete for good'))
+        h('button', { class: 'btn btn-danger', onclick: function() { purge(id); } }, 'Delete forever'))
       : h('div', { class: 'row' },
         busy || editing ? null : h('button', { class: 'btn', onclick: function() { renderMeeting(false, true); } }, 'Edit notes'),
         h('button', { class: 'btn', onclick: copyNotes }, 'Copy'),
         downloadMenu(id),
-        h('button', { class: 'btn btn-danger', onclick: function() { trash(id); } }, 'Delete'))));
+        h('button', { class: 'btn btn-danger', 'aria-label': 'Move to trash', onclick: function() { trash(id); } }, 'Move to trash'))));
 
   if (fromTrash) page.appendChild(h('div', { class: 'banner banner-warn' }, 'This meeting is in the trash. Restore it to edit, tag or download it.'));
   if (busy) page.appendChild(h('div', { class: 'banner banner-info' }, h('span', { class: 'spinner' }),
@@ -745,8 +775,9 @@ function tagEditor(d) {
   var draw = function() {
     box.innerHTML = '';
     tags.forEach(function(t) {
+      var drop = function() { tags = tags.filter(function(x) { return x !== t; }); save(); };
       box.appendChild(h('span', { class: 'tag' }, t,
-        h('span', { class: 'x', title: 'Remove', onclick: function() { tags = tags.filter(function(x) { return x !== t; }); save(); } }, ' ×')));
+        h('span', { class: 'x', role: 'button', tabindex: 0, title: 'Remove', 'aria-label': 'Remove the tag ' + t, onclick: drop, onkeydown: keyClick(drop) }, ' ×')));
     });
     var inp = h('input', { type: 'text', placeholder: '+ tag' });
     inp.onkeydown = function(e) {
@@ -755,7 +786,7 @@ function tagEditor(d) {
     };
     box.appendChild(inp);
     SUGGESTED_TAGS.forEach(function(t) {
-      if (tags.indexOf(t) === -1) box.appendChild(h('span', { class: 'tag off', onclick: function() { tags.push(t); save(); } }, '+ ' + t));
+      if (tags.indexOf(t) === -1) box.appendChild(h('span', { class: 'tag off', role: 'button', tabindex: 0, onclick: function() { tags.push(t); save(); }, onkeydown: keyClick(function() { tags.push(t); save(); }) }, '+ ' + t));
     });
   };
   draw();
@@ -842,9 +873,10 @@ function copyNotes() {
 }
 
 async function trash(id) {
-  if (!confirm('Move this meeting to the trash? You can restore it from Trash.')) return;
+  var yes = await nwConfirm({ title: 'Move this meeting to the trash?', body: 'You can restore it from Trash later.', ok: 'Move to trash', cancel: 'Keep' });
+  if (!yes) return;
   var r = await api('/results/' + id, { method: 'DELETE' });
-  if (!r.ok) { toast('Not deleted: ' + await errorText(r)); return; }
+  if (!r.ok) { toast('Not moved to the trash: ' + await errorText(r)); return; }
   toast('Moved to the trash');
   go('home');
   loadSessions();
@@ -859,10 +891,11 @@ async function restore(id) {
 }
 
 async function purge(id) {
-  if (!confirm('Delete this meeting for good? This cannot be undone.')) return;
+  var yes = await nwConfirm({ title: 'Delete this meeting forever?', body: 'This cannot be undone.', ok: 'Delete forever', cancel: 'Keep', danger: true });
+  if (!yes) return;
   var r = await api('/results/' + id + '/purge', { method: 'DELETE' });
   if (!r.ok) { toast('Not deleted: ' + await errorText(r)); return; }
-  toast('Deleted for good');
+  toast('Deleted forever');
   go('trash');
 }
 
@@ -873,14 +906,14 @@ function renderTrash(items) {
   if (!page || view !== 'trash') return;
   page.innerHTML = '';
   page.appendChild(h('h1', {}, 'Trash'));
-  page.appendChild(h('p', { class: 'dim', style: 'margin:0 0 16px' }, 'Deleted meetings wait here until you restore them or delete them for good.'));
-  if (!items.length) { page.appendChild(h('div', { class: 'card dim' }, 'The trash is empty.')); return; }
+  page.appendChild(h('p', { class: 'dim', style: 'margin:0 0 16px' }, 'Meetings you move to the trash wait here until you restore them or delete them forever.'));
+  if (!items.length) { page.appendChild(h('div', { class: 'card' }, nwEmpty('The trash is empty', 'A meeting you move to the trash waits here until you restore it or delete it forever.', 'Back to your meetings', function() { go('home'); }))); return; }
   var card = h('div', { class: 'card', style: 'padding:8px' });
   items.forEach(function(s) {
     card.appendChild(h('div', { class: 'row', style: 'padding:4px' },
       h('div', { style: 'flex:1;min-width:0' }, meetingRow(s, function() { openMeeting(s.session_id, true); }, true)),
       h('button', { class: 'btn btn-sm', onclick: function() { restore(s.session_id); } }, 'Restore'),
-      h('button', { class: 'btn btn-sm btn-danger', onclick: function() { purge(s.session_id); } }, 'Delete for good')));
+      h('button', { class: 'btn btn-sm btn-danger', onclick: function() { purge(s.session_id); } }, 'Delete forever')));
   });
   page.appendChild(card);
 }
@@ -908,9 +941,10 @@ async function loadAccount() {
   var box = $('account-card');
   if (!box) return;
   var acc = null;
-  try { var r = await api('/account'); acc = r.ok ? await r.json() : null; } catch (e) { acc = null; }
+  try { var r = await api('/account'); acc = r.ok ? await r.json() : null; } catch (e) { if (e.message === 'auth') return; acc = null; }
   box.innerHTML = '';
-  if (!acc) return;
+  if (!acc) { box.appendChild(h('div', { class: 'card' }, h('h2', {}, 'Your account'),
+    nwErrorBanner('Could not load your account details. Check the connection and try again.', loadAccount))); return; }
   box.appendChild(accountCard(acc));
 }
 
@@ -919,9 +953,9 @@ function accountCard(acc) {
   var own = acc.pass === 'device pass';
   var status;
   if (!acc.linked) status = 'Not signed in. Notes, words and dictation history stay on this computer only.';
-  else if (!who) status = 'Your server did not answer just now (' + (acc.error || 'no reply') + '). Notewell keeps working and catches up when it does.';
+  else if (!who) status = 'Your server did not answer just now. Notewell keeps working and catches up when it does.';
   else if (own) status = 'Signed in as ' + who.email + '. Your notes, word list and dictation history are shared with your other devices.';
-  else status = 'Connected with the old shared key. Sign in below so this computer has its own pass.';
+  else status = 'This computer still uses a shared sign-in. Sign in below to give it its own.';
   var url = h('input', { type: 'text', placeholder: 'https://notes.example.com', value: acc.url || '' });
   var email = h('input', { type: 'email', placeholder: 'you@example.com', value: (who && who.email) || '' });
   var pw = h('input', { type: 'password', placeholder: 'Password' });
@@ -948,9 +982,10 @@ var dict = null;        // GET /dictation
 async function loadDictation() {
   var box = $('dictation-cards');
   if (!box) return;
-  try { var r = await api('/dictation'); dict = r.ok ? await r.json() : null; } catch (e) { dict = null; }
+  try { var r = await api('/dictation'); dict = r.ok ? await r.json() : null; } catch (e) { if (e.message === 'auth') return; dict = null; }
   box.innerHTML = '';
-  if (!dict) return;
+  if (!dict) { box.appendChild(h('div', { class: 'card' }, h('h2', {}, 'Dictation'),
+    nwErrorBanner('Could not load the dictation settings. Check the connection and try again.', loadDictation))); return; }
   box.appendChild(dictationCard());
   box.appendChild(wordsCard());
   box.appendChild(historyCard());
@@ -1052,7 +1087,8 @@ function historyCard() {
   var oldest = null;
   var more = h('button', { class: 'btn btn-sm', style: 'display:none', onclick: function() { page(); } }, 'Show older');
   var clear = h('button', { class: 'btn btn-sm btn-danger', onclick: async function() {
-    if (!confirm('Delete all dictation history? This cannot be undone. Your word list stays.')) return;
+    var yes = await nwConfirm({ title: 'Delete all dictation history?', body: 'This cannot be undone. Your word list stays.', ok: 'Delete history', cancel: 'Keep', danger: true });
+    if (!yes) return;
     var r = await api('/dictation/history', { method: 'DELETE' });
     if (!r.ok) { toast('Not cleared: ' + await errorText(r)); return; }
     var d = await r.json();
@@ -1061,10 +1097,19 @@ function historyCard() {
   card.appendChild(h('div', { class: 'row', style: 'margin-top:10px' }, more, clear));
   var first = true;
   async function page() {
-    var r = await api('/dictation/history?limit=50' + (oldest != null ? '&before=' + oldest : ''));
-    var items = r.ok ? (await r.json()).items : [];
+    var r, items;
+    try {
+      r = await api('/dictation/history?limit=50' + (oldest != null ? '&before=' + oldest : ''));
+      if (!r.ok) throw new Error('bad');
+      items = (await r.json()).items || [];
+    } catch (e) {
+      if (e.message === 'auth') return;
+      list.innerHTML = '';
+      list.appendChild(nwErrorBanner('Could not load your dictation history. Check the connection and try again.', function() { first = true; oldest = null; page(); }));
+      return;
+    }
     if (first) { list.innerHTML = ''; first = false; dictNewest = items.length ? items[0].created_at : 0; }
-    if (!items.length && !list.children.length) list.appendChild(h('p', { class: 'dim' }, 'Nothing dictated yet.'));
+    if (!items.length && !list.children.length) list.appendChild(nwEmpty('Nothing dictated yet', 'Hold ' + (prettyKeys(dict.hotkey) || 'the shortcut') + ', speak, and let go. What you said shows up here.'));
     items.forEach(function(it) {
       var when = new Date(it.created_at * 1000);
       list.appendChild(h('div', { style: 'padding:8px 0;border-bottom:1px solid var(--border)' },
@@ -1110,15 +1155,27 @@ async function loadRecordings() {
   var box = $('rec-list');
   if (!box) return;
   var r, d;
-  try { r = await api('/account/recordings'); d = r.ok ? await r.json() : null; } catch (e) { return; }
+  var failed = function() {
+    // the 5-second refresh stays quiet while a list is already on screen
+    if (recShown !== null && recShown !== 'error') return;
+    recShown = 'error';
+    box.innerHTML = '';
+    box.appendChild(nwErrorBanner('Could not load your screen recordings. Check the connection and try again.', function() { recShown = null; loadRecordings(); }));
+  };
+  try { r = await api('/account/recordings'); d = r.ok ? await r.json() : null; } catch (e) { if (e.message !== 'auth') failed(); return; }
   if (!$('rec-list')) return;
-  var key = d ? JSON.stringify(d) : 'error ' + r.status;
+  if (!d) { failed(); return; }
+  var key = JSON.stringify(d);
   if (key === recShown) return;
   recShown = key;
   box.innerHTML = '';
-  if (!d) { box.appendChild(h('div', { class: 'card dim' }, await errorText(r))); return; }
   var items = (d.recordings || []).filter(function(x) { return !x.trashed; });
-  if (!items.length) { box.appendChild(h('div', { class: 'card dim' }, 'No screen recordings yet.')); return; }
+  if (!items.length) {
+    box.appendChild(h('div', { class: 'card' }, nwEmpty('No screen recordings yet', 'Press Ctrl+Shift+R, or the button below, to record your screen. The link is copied when you stop.', 'Record screen', async function() {
+      var t = await api('/screen/toggle', { method: 'POST' });
+      if (!t.ok) toast('Could not start: ' + await errorText(t)); })));
+    return;
+  }
   var card = h('div', { class: 'card', style: 'padding:8px' });
   items.forEach(function(x) {
     var ready = x.status === 'ready';
@@ -1144,7 +1201,7 @@ async function loadRecordings() {
 
 function aiCard() {
   var card = h('div', { class: 'card' }, h('h2', {}, 'AI that writes the notes'));
-  if (!ai) { card.appendChild(h('p', { class: 'dim' }, 'Could not read the AI settings.')); return card; }
+  if (!ai) { card.appendChild(nwErrorBanner('Could not load the AI settings. Check the connection and try again.', async function() { await loadAI(); renderSettings(); })); return card; }
   if (!ai.editable) {
     card.appendChild(h('p', { class: 'hint' }, 'Set by the server\'s configuration file, so it cannot be changed here.'));
     card.appendChild(h('p', {}, h('b', {}, ai.model || '?'), ' at ', h('code', {}, ai.base_url || '?')));
@@ -1167,7 +1224,7 @@ function aiCard() {
     grid.innerHTML = '';
     ai.presets.forEach(function(p) {
       grid.appendChild(h('button', { class: 'preset' + (p.id === chosen.id ? ' on' : ''), onclick: function() { chosen = p; draw(); } },
-        h('b', {}, p.name),
+        h('b', {}, (p.id === chosen.id ? '✓ ' : '') + p.name),
         h('span', { class: 'hint' }, p.free ? (p.needs_key ? 'Free · needs a key' : 'Free · runs on this computer') : (p.id === 'custom' ? 'Any OpenAI-compatible service' : 'Paid · needs a key'))));
     });
     fields.innerHTML = '';
@@ -1223,7 +1280,7 @@ async function testAI(result, values) {
   var d = await r.json().catch(function() { return {}; });
   if (r.ok && d.ok) { result.className = 'result ok'; result.textContent = '✓ It answered in ' + d.seconds + ' s. Notes will be written with it.'; return true; }
   result.className = 'result bad';
-  result.textContent = '✗ ' + (d.error || detailText(d.detail) || ('error ' + r.status));
+  result.textContent = '✗ ' + (d.error || detailText(d.detail) || 'The test did not work. Please try again.');
   return false;
 }
 
@@ -1261,7 +1318,7 @@ function recordingCard() {
 
 // API keys are stored only as hashes, so a key can be shown exactly once: now.
 function showKeyOnce(email, key) {
-  window.prompt('API key for ' + email + '. Copy it now - it cannot be shown again.', key);
+  return nwPrompt({ title: 'New key for ' + email, body: 'Copy it now. It cannot be shown again.', label: 'Key', value: key, ok: 'Done', cancel: false });
 }
 
 function peopleCard() {
@@ -1285,13 +1342,17 @@ async function refreshPeople() {
         h('td', {}, u.email), h('td', {}, u.name), h('td', {}, u.role),
         h('td', {}, u.has_api_key ? 'set ' : 'none ',
           h('button', { class: 'btn btn-sm', title: 'Create a new key. The old one stops working.', onclick: async function() {
-            if (!confirm('Create a new key for ' + u.email + '? Their old key stops working immediately.')) return;
+            var yes = await nwConfirm({ title: 'Make a new key for ' + u.email + '?', body: 'Their old key stops working straight away.', ok: 'Make a new key', cancel: 'Keep the old one' });
+            if (!yes) return;
             var r = await api('/admin/users/' + encodeURIComponent(u.email) + '/rotate-key', { method: 'POST' });
-            if (r.ok) { var d = await r.json(); showKeyOnce(u.email, d.api_key); }
+            if (r.ok) { var d = await r.json(); await showKeyOnce(u.email, d.api_key); }
+            else toast('Could not make a new key: ' + await errorText(r));
           } }, 'New key')),
         h('td', {}, u.email === currentUser.email ? null : h('button', { class: 'btn btn-sm btn-danger', onclick: async function() {
-          if (!confirm('Remove ' + u.email + '? They can no longer sign in.')) return;
-          await api('/admin/users/' + encodeURIComponent(u.email), { method: 'DELETE' });
+          var yes = await nwConfirm({ title: 'Remove ' + u.email + '?', body: 'They can no longer sign in.', ok: 'Remove', cancel: 'Keep', danger: true });
+          if (!yes) return;
+          var gone = await api('/admin/users/' + encodeURIComponent(u.email), { method: 'DELETE' });
+          if (!gone.ok) toast('Could not remove them: ' + await errorText(gone));
           refreshPeople();
         } }, 'Remove'))));
     });
@@ -1309,11 +1370,11 @@ async function refreshPeople() {
         var r = await api('/admin/users', { method: 'POST', json: { email: e.value.trim(), name: n.value.trim(), password: p.value } });
         if (!r.ok) { err.textContent = await errorText(r); return; }
         var made = await r.json();
-        if (made.api_key) showKeyOnce(made.email, made.api_key);
+        if (made.api_key) await showKeyOnce(made.email, made.api_key);
         refreshPeople();
       } }, 'Add')));
     box.appendChild(err);
-  } catch (ex) { if (ex.message !== 'auth') box.textContent = 'Could not load people: ' + ex.message; }
+  } catch (ex) { if (ex.message !== 'auth') { box.innerHTML = ''; box.appendChild(nwErrorBanner('Could not load the list of people. Check the connection and try again.', refreshPeople)); } }
 }
 
 readAddress();
