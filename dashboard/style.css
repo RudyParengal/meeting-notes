@@ -45,6 +45,8 @@ label.field > span { display: block; font-size: 13px; font-weight: 500; color: v
 .item .m { font-size: 12px; color: var(--nw-muted-foreground); display: flex; gap: 6px; align-items: center; flex-wrap: wrap }
 .item.on .m { color: var(--nw-sidebar-accent-fg) }
 .item.trashed .t { text-decoration: line-through; color: var(--nw-muted-foreground) }
+/* in the home page's Recent meetings card the rows line up with the card's heading */
+.recent .item { margin: 2px -6px }
 .side-list .empty-list { color: var(--nw-muted-foreground); padding: 24px 10px; font-size: 13px; text-align: center }
 .me { border-top: 1px solid var(--nw-border); padding: 8px 12px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--nw-muted-foreground) }
 .me b { color: var(--nw-foreground); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
