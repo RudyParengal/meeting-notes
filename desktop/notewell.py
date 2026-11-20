@@ -181,8 +181,9 @@ def run() -> None:
     sys.path[:0] = [str(ROOT / "backend"), str(ROOT / "windows-recorder")]
     HOME.mkdir(parents=True, exist_ok=True)
     console = sys.stdout is not None
+    import logfiles                               # every log: 5 MB, 3 old copies kept
     if not console:                               # the installed app has no console
-        sys.stdout = sys.stderr = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = logfiles.Stream(LOG_FILE)
     if already_running():
         open_running_copy()
         return
@@ -207,7 +208,7 @@ def run() -> None:
     # The server and the recorder each call logging.basicConfig and only the
     # first call counts. Without this the server's came first and the recorder's
     # log - the one its "View logs" opens - stayed empty. One log for both.
-    handlers = [logging.FileHandler(HOME / "recorder" / "recorder.log", encoding="utf-8")]
+    handlers = [logfiles.handler(HOME / "recorder" / "recorder.log")]   # 5 MB, 3 old copies kept
     if console:
         handlers.append(logging.StreamHandler())
     logging.basicConfig(level=logging.INFO, handlers=handlers,
@@ -364,8 +365,9 @@ if __name__ == "__main__":
     if "--screen-record" in sys.argv:             # one screen recording, started by ScreenService
         sys.path[:0] = [str(ROOT / "windows-recorder")]
         (HOME / "recorder").mkdir(parents=True, exist_ok=True)
-        logging.basicConfig(level=logging.INFO, filename=str(HOME / "recorder" / "screen.log"),
-                            encoding="utf-8", format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        import logfiles                           # 5 MB, 3 old copies kept
+        logging.basicConfig(level=logging.INFO, handlers=[logfiles.handler(HOME / "recorder" / "screen.log")],
+                            format="%(asctime)s %(levelname)s %(name)s: %(message)s")
         import screen_record
         try:
             sys.exit(screen_record.child_main(os.environ["NOTEWELL_SCREEN_DIR"]))

@@ -33,6 +33,7 @@ hiddenimports = [
     "window", "linked_server", "PySide6.QtWebEngineWidgets", "PySide6.QtNetwork",
     # dictation (windows-recorder/dictation.py, dictation_store.py): nothing else uses sqlite3
     "sqlite3", "uuid", "queue", "ctypes.wintypes", "urllib.request", "urllib.parse",
+    "logging.handlers",                           # windows-recorder/logfiles.py: logs roll at 5 MB
 ]
 for pkg in ("uvicorn", "faster_whisper", "ctranslate2", "av", "sherpa_onnx",
             "soundcard", "pystray", "tokenizers", "onnxruntime"):

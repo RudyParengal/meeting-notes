@@ -18,6 +18,7 @@ Logs at:          %USERPROFILE%\MeetingRecorder\recorder.log
 import os, sys, json, time, threading, logging, subprocess, uuid, webbrowser, re, struct
 from pathlib import Path
 import spool
+import logfiles
 import soundgaps
 import diarize as diarization
 from datetime import datetime, timezone
@@ -181,7 +182,7 @@ def setup_logging():
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         handlers=[
-            logging.FileHandler(LOG_PATH, encoding="utf-8"),
+            logfiles.handler(LOG_PATH),                 # 5 MB, 3 old copies kept
             logging.StreamHandler(),
         ],
     )
