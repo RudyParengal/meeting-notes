@@ -1,8 +1,14 @@
 # Changelog
 
-## 2.7.0 — Laptop fixes (unreleased)
+## 2.7.0 — New look, and laptop fixes (20 Nov 2026)
+
+What changed since 2.6.1: the app now looks like the website, plus the laptop fixes below.
 
 ### Changed
+- **The app looks like the website.** It uses the same design file (`notewell-ui.css`): the purple Notewell button, the website's sidebar, cards, labels, messages and dark mode. Nothing moved and nothing was removed; every button does what it did.
+- **Easier with the keyboard.** Meetings in the sidebar and the tag filters can be reached with Tab and opened with Enter. Messages that say something did not work now show a red dot.
+- **The dictation bubble, the screen recording flashes and the live transcript window use the website's colours.** Red while the mic is on, amber for "1 minute left", violet while writing, green when a link is copied.
+- **Plainer tray menu.** "Record a meeting", "Stop recording the meeting", "Start recording by itself", "Test the sound (5 seconds)", "Listen to", "Open Notewell", "Quit Notewell". The same words as in the app.
 - **Hands-free dictation can run for 20 minutes** (was 5). At 19 minutes the badge says "1 minute left"; at 20 it types what it heard by itself, so nothing is lost. Holding the keys still stops after 5 minutes, in case a key is stuck down.
 - **A stray key no longer throws a dictation away.** Before, any other key pressed while holding Ctrl+Shift cancelled it, so a slip or Ctrl+Shift+V lost everything said. Now a key within the first second is still a shortcut (Ctrl+Shift+T works as before); after that the dictation carries on and types when you let go. Esc still throws it away. The log names the key that did it.
 - **Auto-detect now catches Google Meet, Teams and Zoom in Chrome or Edge, and no longer records when Teams or Zoom is merely open.** A meeting is now the meeting app or browser tab *and* that program using the microphone. Before, a Google Meet call was missed, an open Teams chat or an email about a Zoom meeting counted, and bringing another tab to the front mid-call stopped the recording; now it keeps recording until the call lets go of the microphone. The log says what it found, never the window title.
