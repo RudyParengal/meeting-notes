@@ -212,6 +212,8 @@ def run() -> None:
         handlers.append(logging.StreamHandler())
     logging.basicConfig(level=logging.INFO, handlers=handlers,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    import soundgaps                              # sound card gaps: one log line a minute, not one each
+    soundgaps.install()
 
     import uvicorn
     server = importlib.import_module("main")     # backend/main.py
@@ -351,6 +353,14 @@ if __name__ == "__main__":
         sys.path[:0] = [str(ROOT / "windows-recorder")]
         import screen_record
         sys.exit(screen_record.flash_main(sys.argv[sys.argv.index("--screen-flash") + 1]))
+    if "--sound-check" in sys.argv:               # 2 minutes: is captured sound being lost?
+        sys.path[:0] = [str(ROOT / "windows-recorder")]
+        import soundgaps
+        HOME.mkdir(parents=True, exist_ok=True)
+        with open(HOME / "sound-check.txt", "a", encoding="utf-8") as out:
+            out.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} sound check, 2 minutes of a faint test tone\n")
+            soundgaps.tone_check(say=lambda line: (out.write(line + "\n"), out.flush()))
+        sys.exit(0)
     if "--screen-record" in sys.argv:             # one screen recording, started by ScreenService
         sys.path[:0] = [str(ROOT / "windows-recorder")]
         (HOME / "recorder").mkdir(parents=True, exist_ok=True)

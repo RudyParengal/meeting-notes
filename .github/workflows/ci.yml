@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          for t in test_config_and_supervisor test_upload test_spool test_capture test_live test_diarize test_embedded test_audio_file test_dictation_store test_dictation; do
+          for t in test_config_and_supervisor test_upload test_spool test_capture test_live test_diarize test_embedded test_audio_file test_dictation_store test_dictation test_soundgaps; do
             echo "=== $t"; python tests/recorder/$t.py
           done
       - name: PowerShell scripts parse

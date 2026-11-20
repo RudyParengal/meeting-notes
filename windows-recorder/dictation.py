@@ -35,6 +35,7 @@ import urllib.request
 
 import numpy as np
 
+import soundgaps
 from dictation_store import apply_words, prompt_hint
 
 log = logging.getLogger("dictation")
@@ -352,7 +353,8 @@ class Mic:
         def run():
             try:
                 import soundcard as sc
-                with sc.default_microphone().recorder(samplerate=SR, channels=1) as rec:
+                with sc.default_microphone().recorder(samplerate=SR, channels=1,
+                                                      blocksize=soundgaps.blocksize(SR)) as rec:
                     while not self._stop.is_set():
                         data = rec.record(numframes=SR // 20)
                         if self.opened_after is None:

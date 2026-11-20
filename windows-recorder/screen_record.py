@@ -400,7 +400,9 @@ class Capture:
             return _ToneMic()
         try:
             import soundcard as sc
-            rec = sc.default_microphone().recorder(samplerate=48000, channels=1, blocksize=1024)
+            import soundgaps
+            soundgaps.install()
+            rec = sc.default_microphone().recorder(samplerate=48000, channels=1, blocksize=soundgaps.blocksize(48000))
             rec.__enter__()
             self.mic_ok = True
             return rec

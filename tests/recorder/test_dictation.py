@@ -589,7 +589,7 @@ class _FakeSoundcard:
                 return np.zeros((numframes, 1), np.float32)
 
         class M:
-            def recorder(self, samplerate, channels):
+            def recorder(self, samplerate, channels, blocksize=None):
                 return Rec()
         self.default_microphone = lambda: M()
 

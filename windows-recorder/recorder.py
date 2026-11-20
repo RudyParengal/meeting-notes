@@ -18,6 +18,7 @@ Logs at:          %USERPROFILE%\MeetingRecorder\recorder.log
 import os, sys, json, time, threading, logging, subprocess, uuid, webbrowser, re, struct
 from pathlib import Path
 import spool
+import soundgaps
 import diarize as diarization
 from datetime import datetime, timezone
 
@@ -266,13 +267,14 @@ class AudioCapture:
             log.info(f"Loopback source: {speaker.name}")
             # loopback=True captures system output
             mic = sc.get_microphone(id=str(speaker.name), include_loopback=True)
-            with mic.recorder(samplerate=self.sample_rate, channels=1) as rec:
+            with mic.recorder(samplerate=self.sample_rate, channels=1,
+                              blocksize=soundgaps.blocksize(self.sample_rate)) as rec:
                 log.info(f"Recording system audio at {self.sample_rate} Hz")
                 while self.recording:
                     data = rec.record(numframes=self.sample_rate)  # 1-second chunks
                     self.frames.append(data)
 
-        self._thread = threading.Thread(target=_record, daemon=True)
+        self._thread = threading.Thread(target=_record, daemon=True, name="meeting-system")
         self._thread.start()
 
     def stop(self):
@@ -373,7 +375,8 @@ class DualAudioCapture:
                         log.warning(f"Audio source '{source}' not found — falling back to default speaker '{speaker.name}'")
                 log.info(f"Loopback source: {speaker.name}")
                 loopback = sc.get_microphone(id=str(speaker.name), include_loopback=True)
-                with loopback.recorder(samplerate=self.sample_rate, channels=1) as rec:
+                with loopback.recorder(samplerate=self.sample_rate, channels=1,
+                                       blocksize=soundgaps.blocksize(self.sample_rate)) as rec:
                     log.info(f"Recording SYSTEM audio at {self.sample_rate} Hz")
                     while self.recording:
                         data = rec.record(numframes=self.sample_rate)  # 1-second chunk
@@ -394,7 +397,8 @@ class DualAudioCapture:
             import numpy as np
             try:
                 mic = sc.default_microphone()
-                with mic.recorder(samplerate=self.sample_rate, channels=1) as rec:
+                with mic.recorder(samplerate=self.sample_rate, channels=1,
+                                  blocksize=soundgaps.blocksize(self.sample_rate)) as rec:
                     log.info(f"Recording MIC audio at {self.sample_rate} Hz")
                     while self.recording:
                         data = rec.record(numframes=self.sample_rate)
@@ -408,8 +412,8 @@ class DualAudioCapture:
                 if self._silence_notify:
                     self._silence_notify("Mic audio crashed", f"Recording continues on system audio only. Error: {type(e).__name__}")
 
-        self._system_thread = threading.Thread(target=_record_system, daemon=True)
-        self._mic_thread = threading.Thread(target=_record_mic, daemon=True)
+        self._system_thread = threading.Thread(target=_record_system, daemon=True, name="meeting-system")
+        self._mic_thread = threading.Thread(target=_record_mic, daemon=True, name="meeting-mic")
         self._system_thread.start()
         self._mic_thread.start()
 
@@ -1544,7 +1548,8 @@ def main(hooks=None):
                 log.info(f"Test audio: capturing 5s from '{speaker.name}'")
                 notify("Testing audio...", f"Play something on {speaker.name} now. Listening for 5s.")
                 mic = sc.get_microphone(id=str(speaker.name), include_loopback=True)
-                with mic.recorder(samplerate=cfg.get("sample_rate", 16000), channels=1) as rec:
+                sr = cfg.get("sample_rate", 16000)
+                with mic.recorder(samplerate=sr, channels=1, blocksize=soundgaps.blocksize(sr)) as rec:
                     data = rec.record(numframes=cfg.get("sample_rate", 16000) * 5)
                 audio = data.flatten().astype(np.float32)
                 rms = float(np.sqrt(np.mean(audio ** 2)))
