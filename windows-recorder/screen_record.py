@@ -503,8 +503,8 @@ def _pick_screen(root, screens, mouse_idx, tk):
     win = tk.Toplevel(root)
     win.title("Record which screen?")
     win.attributes("-topmost", True)
-    win.configure(bg="#14141e", padx=18, pady=14)
-    tk.Label(win, text="Record which screen?", fg="white", bg="#14141e",
+    win.configure(bg="#1C1926", padx=18, pady=14)
+    tk.Label(win, text="Record which screen?", fg="#ECEAF3", bg="#1C1926",
              font=("Segoe UI", 12, "bold")).pack(anchor="w")
     order = sorted(range(len(screens)), key=lambda i: (screens[i][0], screens[i][1]))
     names = {i: (["left", "middle", "right"][order.index(i)] if len(screens) == 3 else
@@ -517,10 +517,10 @@ def _pick_screen(root, screens, mouse_idx, tk):
     for i, (x, y, w, h) in enumerate(screens):
         here = "   (mouse is here)" if i == mouse_idx else ""
         tk.Button(win, text=f"{i + 1}   {names[i].capitalize()} screen, {w}×{h}{here}", anchor="w",
-                  width=44, command=lambda i=i: pick(i), relief="flat", bg="#2a2a3a", fg="white",
-                  activebackground="#3a3a55", font=("Segoe UI", 10)).pack(fill="x", pady=3)
+                  width=44, command=lambda i=i: pick(i), relief="flat", bg="#2D2A36", fg="#ECEAF3",
+                  activebackground="#3D3A47", font=("Segoe UI", 10)).pack(fill="x", pady=3)
         win.bind(str(i + 1), lambda e, i=i: pick(i))
-    tk.Label(win, text="Enter = the screen with the mouse.  Esc = cancel.", fg="#9aa", bg="#14141e",
+    tk.Label(win, text="Enter = the screen with the mouse.  Esc = cancel.", fg="#B9B5C6", bg="#1C1926",
              font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0))
     win.bind("<Return>", lambda e: pick(mouse_idx))
     win.bind("<Escape>", lambda e: win.destroy())
@@ -536,15 +536,15 @@ def _warn(root, reasons, area, tk):
     win = tk.Toplevel(root)
     win.title("Before you record")
     win.attributes("-topmost", True)
-    win.configure(bg="#14141e", padx=18, pady=14)
-    tk.Label(win, text="Before you record this screen", fg="#ffb347", bg="#14141e",
+    win.configure(bg="#1C1926", padx=18, pady=14)
+    tk.Label(win, text="Before you record this screen", fg="#F59E0B", bg="#1C1926",
              font=("Segoe UI", 12, "bold")).pack(anchor="w")
     for r in reasons:
-        tk.Label(win, text="•  " + r, fg="white", bg="#14141e", font=("Segoe UI", 10),
+        tk.Label(win, text="•  " + r, fg="#ECEAF3", bg="#1C1926", font=("Segoe UI", 10),
                  wraplength=420, justify="left").pack(anchor="w", pady=1)
-    tk.Label(win, text="Anyone you send the link to will see it.", fg="#9aa", bg="#14141e",
+    tk.Label(win, text="Anyone you send the link to will see it.", fg="#B9B5C6", bg="#1C1926",
              font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 8))
-    row = tk.Frame(win, bg="#14141e")
+    row = tk.Frame(win, bg="#1C1926")
     row.pack(fill="x")
 
     def go():
@@ -575,11 +575,13 @@ def _hwnd(win):
 # A moment of colour on the screen at Start, at Stop and when the link is ready.
 # Every piece is hidden from capture (never in the video, a screenshot or a
 # screen share) and lets the mouse click straight through it.
+# Colours are the website's dark-mode design colours (notewell-ui.css): destructive,
+# info, success, warning; background popover #1C1926, text #ECEAF3.
 EFFECTS = {
-    "start":   ("#ff4d4d", "\u25cf  Recording", "Press {key} again to stop"),
-    "stop":    ("#4da3ff", "\u25a0  Stopped", "Getting your link\u2026"),
-    "copied":  ("#2ecc71", "\u2713  Link copied", "Ready to paste: Ctrl+V"),
-    "waiting": ("#ffb347", "Saved on this PC", "The link is copied when it uploads"),
+    "start":   ("#EF4444", "\u25cf  Recording", "Press {key} again to stop"),
+    "stop":    ("#828CFF", "\u25a0  Stopped", "Getting your link\u2026"),
+    "copied":  ("#10B981", "\u2713  Link copied", "Ready to paste: Ctrl+V"),
+    "waiting": ("#F59E0B", "Saved on this PC", "The link is copied when it uploads"),
 }
 
 
@@ -607,9 +609,9 @@ def show_effect(root, tk, area, kind, key="", ms=1600):
         wins.append(edge)
     pill = tk.Toplevel(root)
     pill.overrideredirect(True)
-    pill.configure(bg="#14141e", highlightthickness=3, highlightbackground=colour, padx=34, pady=18)
-    tk.Label(pill, text=title, fg=colour, bg="#14141e", font=("Segoe UI", 26, "bold")).pack()
-    tk.Label(pill, text=sub.format(key=key), fg="white", bg="#14141e", font=("Segoe UI", 13)).pack(pady=(2, 0))
+    pill.configure(bg="#1C1926", highlightthickness=3, highlightbackground=colour, padx=34, pady=18)
+    tk.Label(pill, text=title, fg=colour, bg="#1C1926", font=("Segoe UI", 26, "bold")).pack()
+    tk.Label(pill, text=sub.format(key=key), fg="#ECEAF3", bg="#1C1926", font=("Segoe UI", 13)).pack(pady=(2, 0))
     pill.update_idletasks()
     pill.geometry(f"+{x + (w - pill.winfo_reqwidth()) // 2}+{y + (h - pill.winfo_reqheight()) // 3}")
     wins.append(pill)
@@ -741,12 +743,12 @@ def child_main(outbox_dir: str) -> int:
     badge = tk.Toplevel(root)
     badge.overrideredirect(True)
     badge.attributes("-topmost", True)
-    badge.configure(bg="#1c1c26")
-    tk.Label(badge, text="●", fg="#ff4d4d", bg="#1c1c26", font=("Segoe UI", 12)).pack(side="left", padx=(10, 4))
-    clock = tk.Label(badge, text="0:00", fg="white", bg="#1c1c26", font=("Segoe UI", 11))
+    badge.configure(bg="#17141F")
+    tk.Label(badge, text="●", fg="#EF4444", bg="#17141F", font=("Segoe UI", 12)).pack(side="left", padx=(10, 4))
+    clock = tk.Label(badge, text="0:00", fg="#ECEAF3", bg="#17141F", font=("Segoe UI", 11))
     clock.pack(side="left")
-    tk.Button(badge, text="Stop", command=stop_asked.set, relief="flat", bg="#ff4d4d", fg="white",
-              activebackground="#d43c3c", font=("Segoe UI", 10, "bold"), padx=10).pack(side="left", padx=10, pady=6)
+    tk.Button(badge, text="Stop", command=stop_asked.set, relief="flat", bg="#EF4444", fg="#ECEAF3",
+              activebackground="#DC2626", font=("Segoe UI", 10, "bold"), padx=10).pack(side="left", padx=10, pady=6)
     badge.update_idletasks()
     x, y, w, h = area
     badge.geometry(f"+{x + (w - badge.winfo_reqwidth()) // 2}+{y + 8}")

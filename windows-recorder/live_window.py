@@ -27,11 +27,12 @@ import threading
 
 log = logging.getLogger("recorder")
 
-_BG = "#14141e"
-_FG = "#e8e8f0"
-_DIM = "#7a7a8c"
-_ME = "#7fd1ff"
-_THEM = "#ffd479"
+# The website's dark-mode design colours (notewell-ui.css)
+_BG = "#17141F"     # card
+_FG = "#ECEAF3"     # foreground
+_DIM = "#B9B5C6"    # muted foreground
+_ME = "#828CFF"     # info
+_THEM = "#F59E0B"   # warning
 
 
 class LiveWindow:

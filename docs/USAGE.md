@@ -3,10 +3,10 @@
 ## Recording a meeting
 
 1. Find the **blue circle** in the system tray (bottom-right; on Windows 11 it may be behind the **^** arrow).
-2. Right-click → **Start Meeting**. You will hear a short beep.
+2. Right-click → **Record a meeting**. You will hear a short beep.
 3. Have your meeting. Your microphone and the other people (whatever plays through your speakers or headset) are captured separately.
-4. Right-click → **Stop Meeting**. Another beep, then a notification when the note is ready — the time depends on your AI provider and the length of the call.
-5. Open the dashboard (**Open Dashboard** in the same menu) to read it.
+4. Right-click → **Stop recording the meeting**. Another beep, then a notification when the note is ready — the time depends on your AI provider and the length of the call.
+5. Open the dashboard (**Open Notewell** in the same menu) to read it.
 
 You do not need to keep the meeting app in front, and it works with anything that plays sound on Windows: Zoom, Teams, Webex, Slack huddles, Discord, a browser tab, a phone call through your PC.
 
@@ -14,16 +14,16 @@ You do not need to keep the meeting app in front, and it works with anything tha
 
 | Item | What it does |
 |---|---|
-| **Start Meeting / Stop Meeting** | Begin or end recording |
-| **Auto-detect meetings** | Tick to start automatically when a call starts: Zoom, Teams, Webex, Slack or Discord using the microphone, or Google Meet, Teams or Zoom in a Chrome or Edge tab (off by default — see the recording-law note in the README) |
+| **Record a meeting / Stop recording the meeting** | Begin or end recording |
+| **Start recording by itself** | Tick to start automatically when a call starts: Zoom, Teams, Webex, Slack or Discord using the microphone, or Google Meet, Teams or Zoom in a Chrome or Edge tab (off by default — see the recording-law note in the README) |
 | **Live transcript window** | Show or hide the always-on-top window with the text as people speak |
-| **Test Audio (5s)** | Records 5 seconds and tells you whether sound was heard — use it before an important call |
-| **Audio Source** | Pick a specific speaker/headset if the default is wrong |
+| **Test the sound (5 seconds)** | Records 5 seconds and tells you whether sound was heard — use it before an important call |
+| **Listen to** | Pick a specific speaker/headset if the default is wrong |
 | **Recover unfinished meeting** | Appears only if a recording was interrupted (crash, power cut). Click to turn the saved audio into a note |
-| **Open Dashboard** | Opens your notes in the browser |
+| **Open Notewell** | Opens your notes in the browser |
 | **Settings (config.json)** | Opens the settings file |
 | **View logs** | Opens the recorder log |
-| **Quit** | Stops the recorder (a meeting in progress is stopped and sent first). The watchdog restarts it about 10 seconds later — handy for reloading settings. To stop it for good, run `windows-recorder\uninstall.ps1` |
+| **Quit Notewell** | Stops the recorder (a meeting in progress is stopped and sent first). The watchdog restarts it about 10 seconds later — handy for reloading settings. To stop it for good, run `windows-recorder\uninstall.ps1` |
 
 ### If the computer crashes mid-meeting
 
@@ -31,7 +31,7 @@ Audio is written to disk as it is captured. Start the recorder again (it does so
 
 ### Quiet or one-sided recordings
 
-If the recorder hears silence for 10 seconds it warns you — usually the wrong **Audio Source**, or the call is playing through a device that is not selected. Run **Test Audio** and pick the right device.
+If the recorder hears silence for 10 seconds it warns you — usually the wrong **Listen to** choice, or the call is playing through a device that is not selected. Run **Test the sound** and pick the right device.
 
 ---
 

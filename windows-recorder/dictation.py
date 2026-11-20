@@ -1094,10 +1094,13 @@ if os.name == "nt":
         the focus, clicks pass through it, and it is left out of screen shares and
         screenshots. Lives on the keyboard thread, which runs its message loop."""
         W_, H_ = 230, 40
-        STYLES = {"waiting": ("Wait, mic starting...", 0x9A9A9A), "listening": ("Listening", 0x3C3CE8),
-                  "handsfree": ("Listening - tap to stop", 0x3C3CE8),
-                  "lastminute": ("1 minute left", 0x3C3CE8),
-                  "writing": ("Writing...", 0x2BA6F5)}
+        # Dot colours are the website's dark-mode design colours (notewell-ui.css), written
+        # the way Windows wants them: 0xBBGGRR. Grey = muted, red = destructive (the mic is
+        # on), amber = warning, violet = info.
+        STYLES = {"waiting": ("Wait, mic starting...", 0xC6B5B9), "listening": ("Listening", 0x4444EF),
+                  "handsfree": ("Listening - tap to stop", 0x4444EF),
+                  "lastminute": ("1 minute left", 0x0B9EF5),
+                  "writing": ("Writing...", 0xFF8C82)}
         # Windows keeps the window type for the life of the program, so it is registered
         # once, with one callback that finds the bubble it is for (dictation can be
         # switched off and on again, which makes a new bubble).
@@ -1126,7 +1129,7 @@ if os.name == "nt":
             SetLayeredWindowAttributes(self.hwnd, 0, 235, 2)
             SetWindowRgn(self.hwnd, CreateRoundRectRgn(0, 0, self.W_ + 1, self.H_ + 1, self.H_, self.H_), True)
             self.hidden_from_capture = bool(SetWindowDisplayAffinity(self.hwnd, WDA_EXCLUDEFROMCAPTURE))
-            self._bg = CreateSolidBrush(0x2A2A2A)
+            self._bg = CreateSolidBrush(0x26191C)          # popover #1C1926
             self._font = CreateFontW(-15, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
 
         def _wndproc(self, hwnd, msg, wp, lp):
@@ -1145,7 +1148,7 @@ if os.name == "nt":
                         DeleteObject(brush)
                     SelectObject(hdc, self._font)
                     SetBkMode(hdc, 1)
-                    SetTextColor(hdc, 0xFFFFFF)
+                    SetTextColor(hdc, 0xF3EAEC)                 # foreground #ECEAF3
                     DrawTextW(hdc, self.text, -1, ctypes.byref(W.RECT(38 if self.dot else 12, 0, self.W_ - 12, self.H_)),
                               0x24 | 0x8000)                            # vcenter, single line, ellipsis
                     EndPaint(hwnd, ctypes.byref(ps))

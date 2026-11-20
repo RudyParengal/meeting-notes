@@ -80,9 +80,16 @@ function markdownEl(md) {
 function toast(text) {
   var t = $('toast') || document.body.appendChild(h('div', { id: 'toast', class: 'toast' }));
   t.textContent = text;
-  t.classList.add('show');
+  // a red dot for anything that did not work, the design's plain dot otherwise
+  t.className = 'toast' + (/^(Could not|Not |Download failed)/.test(text) ? ' toast-error' : '') + ' show';
+  t.setAttribute('role', 'status');
   clearTimeout(t._to);
   t._to = setTimeout(function() { t.classList.remove('show'); }, 2600);
+}
+
+// Enter or Space on a focused row does what a click does (rows are not real buttons)
+function keyClick(fn) {
+  return function(e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(e); } };
 }
 
 function every(ms, fn) { timers.push(setInterval(fn, ms)); }
@@ -176,12 +183,12 @@ function renderLogin() {
   var root = $('root');
   root.innerHTML = '';
   root.appendChild(h('div', { class: 'card gate' },
-    h('div', { class: 'brand' }, h('span', { class: 'mark' }, 'N'), 'Notewell'),
+    h('div', { class: 'brand' }, h('span', { class: 'brand-tile' }, 'N'), 'Notewell'),
     h('label', { class: 'field' }, h('span', {}, 'Email'),
       h('input', { type: 'email', id: 'login-email', placeholder: 'you@example.com' })),
     h('label', { class: 'field' }, h('span', {}, 'Password'), pw),
     h('div', { id: 'login-error', class: 'err' }),
-    h('button', { class: 'btn primary', style: 'width:100%;justify-content:center', onclick: doLogin }, 'Sign in'),
+    h('button', { class: 'btn btn-primary', style: 'width:100%;justify-content:center', onclick: doLogin }, 'Sign in'),
     h('p', { class: 'hint' }, 'The administrator can sign in as admin@localhost with the server\'s key as the password.')));
 }
 
@@ -255,15 +262,15 @@ function renderShell() {
   });
   root.appendChild(h('div', { class: 'shell' },
     h('aside', { class: 'side' },
-      h('div', { class: 'brand' }, h('span', { class: 'mark' }, 'N'), 'Notewell'),
+      h('div', { class: 'brand' }, h('span', { class: 'brand-tile' }, 'N'), 'Notewell'),
       h('div', { id: 'recbtn-slot' }),
       h('nav', { class: 'nav', id: 'nav' }),
       h('div', { class: 'search' }, searchBox),
       h('div', { class: 'tagbar', id: 'tagbar' }),
-      h('div', { class: 'list', id: 'list' }),
+      h('div', { class: 'side-list', id: 'list' }),
       h('div', { class: 'me' },
         h('b', {}, currentUser.name || currentUser.email), h('span', { class: 'spacer' }),
-        h('button', { class: 'btn ghost small', onclick: doLogout }, 'Sign out'))),
+        h('button', { class: 'btn btn-ghost btn-sm', onclick: doLogout }, 'Sign out'))),
     h('main', { class: 'main', id: 'main' })));
   renderRecordButton();
   renderNav();
@@ -277,7 +284,7 @@ function renderRecordButton() {
   if (!rec) return;
   var b = rec.recording
     ? h('button', { class: 'btn cta recording', onclick: stopRecording }, '■  Stop recording')
-    : h('button', { class: 'btn primary cta', onclick: function() { go('home'); startRecording(); } }, '●  Record a meeting');
+    : h('button', { class: 'btn btn-brand cta', onclick: function() { go('home'); startRecording(); } }, '●  Record a meeting');
   slot.appendChild(h('div', { style: 'display:flex;flex-direction:column' }, b));
 }
 
@@ -291,7 +298,7 @@ function renderNav() {
   nav.appendChild(item('home', 'Home'));
   if (isAdmin() && rec) nav.appendChild(item('dictation', 'Dictation'));
   if (isAdmin() && rec) nav.appendChild(item('recordings', 'Screen recordings'));
-  if (isAdmin()) nav.appendChild(item('settings', 'Settings', ai && !ai.ready ? h('span', { class: 'pill warn', style: 'margin-left:auto' }, 'set up') : null));
+  if (isAdmin()) nav.appendChild(item('settings', 'Settings', ai && !ai.ready ? h('span', { class: 'badge badge-warning', style: 'margin-left:auto' }, 'set up') : null));
   nav.appendChild(item('trash', 'Trash', trashCount ? h('span', { class: 'count' }, trashCount) : null));
 }
 
@@ -310,7 +317,9 @@ function renderTagBar() {
   all.forEach(function(t) {
     bar.appendChild(h('span', {
       class: 'tag' + (tagFilter === t ? ' sel' : ' off'),
-      onclick: function() { tagFilter = tagFilter === t ? null : t; renderTagBar(); loadSessions(); }
+      tabindex: 0, role: 'button', 'aria-pressed': tagFilter === t ? 'true' : 'false',
+      onclick: function() { tagFilter = tagFilter === t ? null : t; renderTagBar(); loadSessions(); },
+      onkeydown: keyClick(function() { tagFilter = tagFilter === t ? null : t; renderTagBar(); loadSessions(); })
     }, t));
   });
 }
@@ -335,14 +344,15 @@ async function loadSessions() {
 }
 
 function statusPill(s) {
-  if (s.status === 'processing') return h('span', { class: 'pill warn' }, h('span', { class: 'spinner' }), ' writing notes');
-  if (s.status === 'transcribing') return h('span', { class: 'pill warn' }, h('span', { class: 'spinner' }), ' transcribing');
-  if (s.status === 'failed') return h('span', { class: 'pill bad' }, 'needs attention');
+  if (s.status === 'processing') return h('span', { class: 'badge badge-warning' }, h('span', { class: 'spinner' }), ' writing notes');
+  if (s.status === 'transcribing') return h('span', { class: 'badge badge-warning' }, h('span', { class: 'spinner' }), ' transcribing');
+  if (s.status === 'failed') return h('span', { class: 'badge badge-error' }, 'needs attention');
   return null;
 }
 
 function meetingRow(s, onclick, trashed) {
-  return h('div', { class: 'item' + (s.session_id === activeId && view === 'meeting' ? ' on' : '') + (trashed ? ' trashed' : ''), onclick: onclick },
+  return h('div', { class: 'item' + (s.session_id === activeId && view === 'meeting' ? ' on' : '') + (trashed ? ' trashed' : ''), onclick: onclick,
+      tabindex: 0, role: 'button', onkeydown: keyClick(onclick) },
     h('div', { class: 't' }, title(s)),
     h('div', { class: 'm' },
       timeOf(s.timestamp), h('span', {}, '·'), minutes(s.duration_sec),
@@ -393,10 +403,10 @@ function renderHome() {
     h('h1', {}, greeting()),
     h('p', { class: 'dim', style: 'margin:0 0 20px' }, rec ? 'Record a call and Notewell writes the notes.' : 'Your meeting notes.'));
   if (isAdmin() && ai && !ai.ready) {
-    page.appendChild(h('div', { class: 'banner warn' },
+    page.appendChild(h('div', { class: 'banner banner-warn' },
       h('div', { class: 'grow' }, h('b', {}, 'One step left: choose an AI. '),
         'Meetings are recorded and transcribed without one, but the notes need an AI to write them. There is a free option.'),
-      h('button', { class: 'btn primary', onclick: function() { go('settings'); } }, 'Set up the AI')));
+      h('button', { class: 'btn btn-primary', onclick: function() { go('settings'); } }, 'Set up the AI')));
   }
   var left = h('div', {});
   if (rec) left.appendChild(recorderCard());
@@ -428,7 +438,7 @@ function renderRecent() {
 function recorderCard() {
   var card = h('div', { class: 'card recorder' + (rec.recording ? ' recording' : '') });
   if (rec.recording) {
-    card.appendChild(h('div', { class: 'pill bad' }, '● Recording'));
+    card.appendChild(h('div', { class: 'badge badge-error' }, '● Recording'));
     card.appendChild(h('button', { class: 'recbtn stop', title: 'Stop', onclick: stopRecording }, h('span', { class: 'sq' })));
     card.appendChild(h('div', { class: 'timer', id: 'rec-timer' }, clock(rec.seconds)));
     card.appendChild(h('div', { class: 'meters' },
@@ -447,10 +457,10 @@ function recorderCard() {
     card.appendChild(h('p', { class: 'consent' }, 'Tell people on the call that you are recording. In many places it is the law.'));
   }
   if (rec.processing) {
-    card.appendChild(h('div', { class: 'banner info', style: 'margin:16px 0 0;justify-content:center' },
+    card.appendChild(h('div', { class: 'banner banner-info', style: 'margin:16px 0 0;justify-content:center' },
       h('span', { class: 'spinner' }), 'Turning the last meeting into text. It appears on the left when done.'));
   } else if (!rec.model_ready) {
-    card.appendChild(h('div', { class: 'banner info', style: 'margin:16px 0 0;justify-content:center' },
+    card.appendChild(h('div', { class: 'banner banner-info', style: 'margin:16px 0 0;justify-content:center' },
       h('span', { class: 'spinner' }), 'Getting the speech model ready. The first time this downloads about 500 MB; you can record meanwhile.'));
   }
   updateMetersSoon();
@@ -471,7 +481,7 @@ function screenCard() {
     card.appendChild(h('p', { class: 'hint' }, s.recording
       ? 'Press ' + s.hotkey + ' or the Stop button on the screen to finish. The link is copied for you.'
       : 'Your screen and your voice. When you stop, a link is copied: anyone you send it to can watch, no account needed. Shortcut: ' + s.hotkey + '.'));
-    card.appendChild(h('button', { class: 'btn' + (s.recording ? '' : ' primary'), onclick: async function() {
+    card.appendChild(h('button', { class: 'btn' + (s.recording ? '' : ' btn-primary'), onclick: async function() {
       var r = await api('/screen/toggle', { method: 'POST' });
       if (!r.ok) { toast('Could not ' + (s.recording ? 'stop' : 'start') + ': ' + await errorText(r)); return; }
       paint(await r.json());
@@ -617,26 +627,26 @@ function renderMeeting(fromTrash, editing) {
         new Date(d.timestamp).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }),
         h('span', {}, '·'), minutes(d.duration_sec),
         d.meeting_type ? h('span', {}, '· ' + cap(d.meeting_type) + ' meeting') : null,
-        d.edited_at ? h('span', { class: 'pill' }, 'edited') : null),
+        d.edited_at ? h('span', { class: 'badge' }, 'edited') : null),
       fromTrash ? null : tagEditor(d)),
     fromTrash ? h('div', { class: 'row' },
-        h('button', { class: 'btn primary', onclick: function() { restore(id); } }, 'Restore'),
-        h('button', { class: 'btn danger', onclick: function() { purge(id); } }, 'Delete for good'))
+        h('button', { class: 'btn btn-primary', onclick: function() { restore(id); } }, 'Restore'),
+        h('button', { class: 'btn btn-danger', onclick: function() { purge(id); } }, 'Delete for good'))
       : h('div', { class: 'row' },
         busy || editing ? null : h('button', { class: 'btn', onclick: function() { renderMeeting(false, true); } }, 'Edit notes'),
         h('button', { class: 'btn', onclick: copyNotes }, 'Copy'),
         downloadMenu(id),
-        h('button', { class: 'btn danger', onclick: function() { trash(id); } }, 'Delete'))));
+        h('button', { class: 'btn btn-danger', onclick: function() { trash(id); } }, 'Delete'))));
 
-  if (fromTrash) page.appendChild(h('div', { class: 'banner warn' }, 'This meeting is in the trash. Restore it to edit, tag or download it.'));
-  if (busy) page.appendChild(h('div', { class: 'banner info' }, h('span', { class: 'spinner' }),
+  if (fromTrash) page.appendChild(h('div', { class: 'banner banner-warn' }, 'This meeting is in the trash. Restore it to edit, tag or download it.'));
+  if (busy) page.appendChild(h('div', { class: 'banner banner-info' }, h('span', { class: 'spinner' }),
     d.status === 'transcribing' ? 'Turning the recording into text…' : 'Writing the notes. This usually takes under a minute.'));
   if (d.status === 'failed') {
     var notSetUp = (d.error || '').indexOf('No AI is set up') === 0;
-    page.appendChild(h('div', { class: 'banner bad' },
+    page.appendChild(h('div', { class: 'banner banner-error' },
       h('div', { class: 'grow' }, h('b', {}, notSetUp ? 'No notes yet: no AI is set up. ' : 'The notes could not be written. '),
         notSetUp ? 'The transcript is safe. Set up an AI, then press “Write the notes” below.' : (d.error || '')),
-      notSetUp && isAdmin() ? h('button', { class: 'btn primary', onclick: function() { go('settings'); } }, 'Set up the AI') : null));
+      notSetUp && isAdmin() ? h('button', { class: 'btn btn-primary', onclick: function() { go('settings'); } }, 'Set up the AI') : null));
   }
   if (!fromTrash && !busy && !editing && d.transcript) page.appendChild(rewritePanel(d));
 
@@ -645,7 +655,7 @@ function renderMeeting(fromTrash, editing) {
     h('div', { class: 'pane-b' }, editing ? editBox(d) : notesBody(d)));
   var txPane = h('div', { class: 'pane tx' },
     h('div', { class: 'pane-h' }, 'Transcript', h('span', { class: 'spacer' }),
-      d.transcript ? h('button', { class: 'btn ghost small', onclick: function() { copyText(d.transcript, 'Transcript copied'); } }, 'Copy') : null),
+      d.transcript ? h('button', { class: 'btn btn-ghost btn-sm', onclick: function() { copyText(d.transcript, 'Transcript copied'); } }, 'Copy') : null),
     h('div', { class: 'pane-b' }, transcriptBody(d.transcript)));
   page.appendChild(h('div', { class: 'split' }, notesPane, txPane));
   main.appendChild(page);
@@ -702,16 +712,16 @@ function editBox(d) {
     h('p', { class: 'hint' }, 'Plain text with # headings, - bullets and **bold**. Your edit is kept unless you press “Write the notes again”.'),
     err,
     h('div', { class: 'row' },
-      h('button', { class: 'btn primary', onclick: save }, 'Save'),
+      h('button', { class: 'btn btn-primary', onclick: save }, 'Save'),
       h('button', { class: 'btn', onclick: function() { renderMeeting(false, false); } }, 'Cancel')));
 }
 
 function rewritePanel(d) {
-  var sel = h('select', {}, Object.keys(templates).map(function(k) {
+  var sel = h('select', { 'aria-label': 'Style of notes' }, Object.keys(templates).map(function(k) {
     return h('option', { value: k, title: templates[k] }, cap(k) + ' meeting');
   }));
   sel.value = templates[d.meeting_type] ? d.meeting_type : 'generic';
-  var ctx = h('textarea', { placeholder: 'Anything the AI should know: who was there, what the meeting was for, names it keeps getting wrong…', value: d.context || '' });
+  var ctx = h('textarea', { 'aria-label': 'Context for the AI', placeholder: 'Anything the AI should know: who was there, what the meeting was for, names it keeps getting wrong…', value: d.context || '' });
   var go_ = async function() {
     var r = await api('/results/' + d.session_id + '/reprocess?meeting_type=' + encodeURIComponent(sel.value),
       { method: 'POST', json: { context: ctx.value } });
@@ -723,7 +733,7 @@ function rewritePanel(d) {
   var label = written(d.summary) || written(d.actions) ? 'Write the notes again' : 'Write the notes';
   return h('div', { class: 'card', style: 'padding:14px 16px' },
     h('div', { class: 'hint', style: 'margin-bottom:8px;font-weight:600' }, label + ' — choose a style and add context if it helps'),
-    h('div', { class: 'rewrite' }, sel, ctx, h('button', { class: 'btn primary', onclick: go_ }, label)),
+    h('div', { class: 'rewrite' }, sel, ctx, h('button', { class: 'btn btn-primary', onclick: go_ }, label)),
     d.edited_at ? h('div', { class: 'hint' }, 'This replaces your edited notes.') : null);
 }
 
@@ -869,8 +879,8 @@ function renderTrash(items) {
   items.forEach(function(s) {
     card.appendChild(h('div', { class: 'row', style: 'padding:4px' },
       h('div', { style: 'flex:1;min-width:0' }, meetingRow(s, function() { openMeeting(s.session_id, true); }, true)),
-      h('button', { class: 'btn small', onclick: function() { restore(s.session_id); } }, 'Restore'),
-      h('button', { class: 'btn small danger', onclick: function() { purge(s.session_id); } }, 'Delete for good')));
+      h('button', { class: 'btn btn-sm', onclick: function() { restore(s.session_id); } }, 'Restore'),
+      h('button', { class: 'btn btn-sm btn-danger', onclick: function() { purge(s.session_id); } }, 'Delete for good')));
   });
   page.appendChild(card);
 }
@@ -915,7 +925,7 @@ function accountCard(acc) {
   var url = h('input', { type: 'text', placeholder: 'https://notes.example.com', value: acc.url || '' });
   var email = h('input', { type: 'email', placeholder: 'you@example.com', value: (who && who.email) || '' });
   var pw = h('input', { type: 'password', placeholder: 'Password' });
-  var go = h('button', { class: 'btn primary', onclick: async function() {
+  var go = h('button', { class: 'btn btn-primary', onclick: async function() {
     go.disabled = true;
     var form = { url: url.value, email: email.value };
     form[pw.type] = pw.value;                      // the typed password, never stored here
@@ -927,7 +937,7 @@ function accountCard(acc) {
     await loadAccount();
   } }, own ? 'Sign in again' : 'Sign in');
   return h('div', { class: 'card' }, h('h2', {}, 'Your account'),
-    h('p', { class: 'hint' }, own ? h('span', { class: 'pill ok', style: 'margin-right:8px' }, 'Signed in') : null, status),
+    h('p', { class: 'hint' }, own ? h('span', { class: 'badge badge-success', style: 'margin-right:8px' }, 'Signed in') : null, status),
     h('div', { class: 'row', style: 'display:grid;gap:8px;max-width:420px' }, url, email, pw, go));
 }
 
@@ -983,8 +993,8 @@ function dictationCard() {
   return h('div', { class: 'card' },
     h('h2', {}, 'Dictation'),
     h('p', { class: 'hint' }, 'Hold ', h('b', {}, prettyKeys(d.hotkey)), ' anywhere in Windows, speak, and let go: the words are typed where your cursor is. Or tap it once to talk hands-free, and tap again to type (Esc cancels). Speech is turned into text on this computer. Never types into password boxes, and does not disturb a meeting being recorded.'),
-    d.last_error ? h('div', { class: 'banner warn', style: 'margin:10px 0' }, d.last_error) : null,
-    !d.model_ready && d.enabled ? h('div', { class: 'banner info', style: 'margin:10px 0' }, h('span', { class: 'spinner' }), 'Getting the speech model ready…') : null,
+    d.last_error ? h('div', { class: 'banner banner-warn', style: 'margin:10px 0' }, d.last_error) : null,
+    !d.model_ready && d.enabled ? h('div', { class: 'banner banner-info', style: 'margin:10px 0' }, h('span', { class: 'spinner' }), 'Getting the speech model ready…') : null,
     h('label', { class: 'switch' }, on, h('span', {}, h('b', {}, 'Dictation on'),
       h('div', { class: 'hint' }, 'Switch off to stop Notewell listening for the shortcut at all.'))),
     h('div', { class: 'two', style: 'margin-top:12px' },
@@ -1013,12 +1023,12 @@ function wordsCard() {
     table.appendChild(h('tr', {},
       h('td', {}, term), h('td', {}, mis), h('td', {}, String(w.use_count)),
       h('td', { style: 'white-space:nowrap' },
-        h('button', { class: 'btn small', onclick: async function() {
+        h('button', { class: 'btn btn-sm', onclick: async function() {
           var r = await api('/dictation/words/' + w.id, { method: 'PUT', json: { term: term.value, mishearing: mis.value } });
           if (!r.ok) { toast('Not saved: ' + await errorText(r)); return; }
           await loadDictation(); toast('Saved'); } }, 'Save'),
         ' ',
-        h('button', { class: 'btn small danger', onclick: async function() {
+        h('button', { class: 'btn btn-sm btn-danger', onclick: async function() {
           var r = await api('/dictation/words/' + w.id, { method: 'DELETE' });
           if (!r.ok) { toast('Not removed: ' + await errorText(r)); return; }
           await loadDictation(); toast('Removed'); } }, 'Remove'))));
@@ -1026,7 +1036,7 @@ function wordsCard() {
   var nt = h('input', { type: 'text', placeholder: 'e.g. Kubernetes' });
   var nm = h('input', { type: 'text', placeholder: 'e.g. paren gal, para angel' });
   table.appendChild(h('tr', {}, h('td', {}, nt), h('td', {}, nm), h('td', {}),
-    h('td', {}, h('button', { class: 'btn small primary', onclick: async function() {
+    h('td', {}, h('button', { class: 'btn btn-sm btn-primary', onclick: async function() {
       var r = await api('/dictation/words', { method: 'POST', json: { term: nt.value, mishearing: nm.value } });
       if (!r.ok) { toast('Not added: ' + await errorText(r)); return; }
       await loadDictation(); toast('Added'); } }, 'Add'))));
@@ -1040,8 +1050,8 @@ function historyCard() {
     h('p', { class: 'hint' }, 'Kept on this computer, and on your other devices when you are signed in to your account. ', h('b', {}, prettyKeys(dict.repaste_hotkey) || 'The repaste shortcut'), ' types the latest one again.'),
     list);
   var oldest = null;
-  var more = h('button', { class: 'btn small', style: 'display:none', onclick: function() { page(); } }, 'Show older');
-  var clear = h('button', { class: 'btn small danger', onclick: async function() {
+  var more = h('button', { class: 'btn btn-sm', style: 'display:none', onclick: function() { page(); } }, 'Show older');
+  var clear = h('button', { class: 'btn btn-sm btn-danger', onclick: async function() {
     if (!confirm('Delete all dictation history? This cannot be undone. Your word list stays.')) return;
     var r = await api('/dictation/history', { method: 'DELETE' });
     if (!r.ok) { toast('Not cleared: ' + await errorText(r)); return; }
@@ -1115,14 +1125,14 @@ async function loadRecordings() {
     var bits = [new Date(x.created * 1000).toLocaleDateString() + ' ' + timeOf(x.created * 1000)];
     if (x.duration_sec) bits.push(clock(x.duration_sec));
     if (x.password_set) bits.push('password set');
-    var pill = !ready ? h('span', { class: 'pill warn' }, x.status === 'uploading' ? 'uploading' : x.status)
-      : x.share_on ? h('span', { class: 'pill ok' }, 'link on') : h('span', { class: 'pill' }, 'link off');
+    var pill = !ready ? h('span', { class: 'badge badge-warning' }, x.status === 'uploading' ? 'uploading' : x.status)
+      : x.share_on ? h('span', { class: 'badge badge-success' }, 'link on') : h('span', { class: 'badge' }, 'link off');
     card.appendChild(h('div', { class: 'row', style: 'padding:8px 4px;border-bottom:1px solid var(--border)' },
       h('div', { style: 'flex:1;min-width:0' }, h('b', {}, x.title || 'Screen recording'), ' ', pill,
         h('div', { class: 'hint' }, bits.join(' · '))),
-      ready && x.share_url ? h('button', { class: 'btn small', onclick: function() { copyText(x.share_url, 'Link copied'); } }, 'Copy link') : null,
-      ready && x.share_url ? h('a', { class: 'btn small', href: x.share_url, target: '_blank', rel: 'noopener noreferrer' }, 'Watch') : null,
-      ready ? h('button', { class: 'btn small', onclick: async function(ev) {
+      ready && x.share_url ? h('button', { class: 'btn btn-sm', onclick: function() { copyText(x.share_url, 'Link copied'); } }, 'Copy link') : null,
+      ready && x.share_url ? h('a', { class: 'btn btn-sm', href: x.share_url, target: '_blank', rel: 'noopener noreferrer' }, 'Watch') : null,
+      ready ? h('button', { class: 'btn btn-sm', onclick: async function(ev) {
         ev.target.disabled = true;
         var c = await api('/account/recordings/' + encodeURIComponent(x.id), { method: 'PATCH', json: { share_on: !x.share_on } });
         if (!c.ok) { toast('Not changed: ' + await errorText(c)); ev.target.disabled = false; return; }
@@ -1147,7 +1157,7 @@ function aiCard() {
       h('span', {}, h('b', {}, '2'), 'Get a key from its website'),
       h('span', {}, h('b', {}, '3'), 'Paste it here and press Save')));
   } else {
-    card.appendChild(h('div', { class: 'banner ok', style: 'margin:10px 0' }, '✓ Ready. Using ', h('b', {}, ai.model), ' (' + presetName(ai.provider) + ').'));
+    card.appendChild(h('div', { class: 'banner banner-success', style: 'margin:10px 0' }, '✓ Ready. Using ', h('b', {}, ai.model), ' (' + presetName(ai.provider) + ').'));
   }
 
   var chosen = ai.presets.filter(function(p) { return p.id === ai.provider; })[0] || ai.presets[0];
@@ -1191,7 +1201,7 @@ function aiCard() {
       if (ok) setTimeout(renderSettings, 1500);
     };
     fields.appendChild(h('div', { class: 'row' },
-      h('button', { class: 'btn primary', onclick: save }, 'Save'),
+      h('button', { class: 'btn btn-primary', onclick: save }, 'Save'),
       h('button', { class: 'btn', onclick: function() { testAI(result, values()); } }, 'Test without saving')));
     fields.appendChild(result);
   };
@@ -1274,12 +1284,12 @@ async function refreshPeople() {
       table.appendChild(h('tr', {},
         h('td', {}, u.email), h('td', {}, u.name), h('td', {}, u.role),
         h('td', {}, u.has_api_key ? 'set ' : 'none ',
-          h('button', { class: 'btn small', title: 'Create a new key. The old one stops working.', onclick: async function() {
+          h('button', { class: 'btn btn-sm', title: 'Create a new key. The old one stops working.', onclick: async function() {
             if (!confirm('Create a new key for ' + u.email + '? Their old key stops working immediately.')) return;
             var r = await api('/admin/users/' + encodeURIComponent(u.email) + '/rotate-key', { method: 'POST' });
             if (r.ok) { var d = await r.json(); showKeyOnce(u.email, d.api_key); }
           } }, 'New key')),
-        h('td', {}, u.email === currentUser.email ? null : h('button', { class: 'btn small danger', onclick: async function() {
+        h('td', {}, u.email === currentUser.email ? null : h('button', { class: 'btn btn-sm btn-danger', onclick: async function() {
           if (!confirm('Remove ' + u.email + '? They can no longer sign in.')) return;
           await api('/admin/users/' + encodeURIComponent(u.email), { method: 'DELETE' });
           refreshPeople();
@@ -1294,7 +1304,7 @@ async function refreshPeople() {
     box.appendChild(h('div', { class: 'row' },
       h('div', { style: 'flex:1;min-width:150px' }, e), h('div', { style: 'flex:1;min-width:120px' }, n),
       h('div', { style: 'flex:1;min-width:150px' }, p),
-      h('button', { class: 'btn primary', onclick: async function() {
+      h('button', { class: 'btn btn-primary', onclick: async function() {
         if (!e.value.trim() || !n.value.trim() || !p.value) return;
         var r = await api('/admin/users', { method: 'POST', json: { email: e.value.trim(), name: n.value.trim(), password: p.value } });
         if (!r.ok) { err.textContent = await errorText(r); return; }

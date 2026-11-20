@@ -68,8 +68,8 @@ Programs started from some editors, terminals or desktop apps can end up in a sa
 
 ### Silent, quiet or one-sided recordings
 
-1. Tray → **Test Audio (5s)** while something is playing. It reports OK, faint or silent.
-2. Tray → **Audio Source** and choose the device the call actually plays through (headset vs speakers).
+1. Tray → **Test the sound (5 seconds)** while something is playing. It reports OK, faint or silent.
+2. Tray → **Listen to** and choose the device the call actually plays through (headset vs speakers).
 3. Bluetooth headsets can switch devices when a call starts; re-run the test after connecting.
 
 ### Speaker separation is wrong

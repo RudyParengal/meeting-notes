@@ -5,12 +5,12 @@ Captures system audio via WASAPI loopback, transcribes with faster-whisper,
 and sends the transcript to your Meeting Notes server.
 
 Tray icon menu:
-  - Start Meeting          — begin capturing system audio
-  - Stop Meeting           — end capture, transcribe, send to your server
-  - Auto-detect meetings   — start by itself when Zoom, Teams, Meet etc. (app or browser) use the mic
-  - Open Dashboard         — open your server's dashboard in the browser
+  - Record a meeting / Stop recording the meeting
+                           — begin capturing; end, transcribe, send to your server
+  - Start recording by itself — when Zoom, Teams, Meet etc. (app or browser) use the mic
+  - Open Notewell          — open the notes
   - Settings               — edit config.json
-  - Quit
+  - Quit Notewell
 
 Config lives at: %USERPROFILE%\MeetingRecorder\config.json
 Logs at:          %USERPROFILE%\MeetingRecorder\recorder.log
@@ -1809,20 +1809,20 @@ def main(hooks=None):
             return pystray.Menu(*items)
         except Exception as e:
             log.warning(f"Could not build source menu: {e}")
-            return pystray.Menu(pystray.MenuItem("(error listing devices)", lambda i, it: None))
+            return pystray.Menu(pystray.MenuItem("Could not list the speakers", lambda i, it: None))
 
     def _primary_label(i):
         if mgr.in_meeting:
-            return "Stop Meeting"
+            return "Stop recording the meeting"
         if mgr._manual_stop_override:
-            return "Start Meeting (auto-restart suppressed — won't auto-start until meeting app closes)"
-        return "Start Meeting"
+            return "Record a meeting (will not start by itself until the call app closes)"
+        return "Record a meeting"
 
     log.info("startup: building tray menu")
     menu = pystray.Menu(
         pystray.MenuItem(_primary_label,
                          lambda i, it: on_stop(i, it) if mgr.in_meeting else on_start(i, it)),
-        pystray.MenuItem("Auto-detect meetings",
+        pystray.MenuItem("Start recording by itself",
                          auto_detect_toggle,
                          checked=lambda i: cfg.get("auto_detect", False)),
         pystray.MenuItem("Live transcript window",
@@ -1832,16 +1832,16 @@ def main(hooks=None):
                          lambda i, it: hooks["screen"].toggle(),
                          visible=lambda i: bool(hooks and hooks.get("screen"))),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("🔊 Test Audio (5s)", _test_audio),
-        pystray.MenuItem("Audio Source", _build_source_menu()),
+        pystray.MenuItem("Test the sound (5 seconds)", _test_audio),
+        pystray.MenuItem("Listen to", _build_source_menu()),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Recover unfinished meeting", on_recover,
                          visible=lambda i: bool(spool.list_orphans(SPOOL_ROOT))),
-        pystray.MenuItem("Open Notewell" if hooks else "Open Dashboard", on_dashboard, default=bool(hooks)),
-        pystray.MenuItem("Settings" if hooks else "Settings (config.json)", on_settings),
+        pystray.MenuItem("Open Notewell", on_dashboard, default=bool(hooks)),
+        pystray.MenuItem("Settings" if hooks else "Settings (config file)", on_settings),
         pystray.MenuItem("View logs", on_logs),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Quit", on_quit),
+        pystray.MenuItem("Quit Notewell", on_quit),
     )
 
     log.info("startup: tray menu built")

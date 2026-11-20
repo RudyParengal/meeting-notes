@@ -136,7 +136,7 @@ The installer writes this file. After editing, right-click the tray icon → **Q
 | `custom_vocabulary` | `[]` | Names and jargon to help the speech model, e.g. `["Acme", "Kubernetes"]` |
 | `meeting_type_default` | `auto` | `auto`, or force `client`, `sales`, `team`, `technical`, `investment`, `standup`, `interview`, `generic` |
 | `spool_enabled` | `true` | Write audio to disk as it is captured, so a crash loses nothing. Leave on |
-| `audio_source` | `default` | A specific speaker/headset name (or use the tray's **Audio Source**) |
+| `audio_source` | `default` | A specific speaker/headset name (or use the tray's **Listen to**) |
 | `sound_effects` | `true` | Beep on start/stop |
 | `silence_alert_seconds` | `10` | Warn if the call has been silent this long |
 | `auto_stop_silence_minutes` | `15` | Stop a forgotten recording after this many minutes with no sound; `0` = never |
