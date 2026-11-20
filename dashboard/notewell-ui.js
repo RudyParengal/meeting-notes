@@ -119,4 +119,19 @@
     }
     return e;
   };
+
+  // Colours: '' follows the computer, 'light' or 'dark' sticks (kept in this browser only).
+  function applyTheme(v) {
+    if (v === 'light' || v === 'dark') document.documentElement.dataset.theme = v;
+    else delete document.documentElement.dataset.theme;
+  }
+  var savedTheme = '';
+  try { savedTheme = localStorage.getItem('nw-theme') || ''; } catch (e) {}
+  applyTheme(savedTheme);
+  window.nwGetTheme = function () { return savedTheme; };
+  window.nwSetTheme = function (v) {
+    savedTheme = (v === 'light' || v === 'dark') ? v : '';
+    applyTheme(savedTheme);
+    try { if (savedTheme) localStorage.setItem('nw-theme', savedTheme); else localStorage.removeItem('nw-theme'); } catch (e) {}
+  };
 })();

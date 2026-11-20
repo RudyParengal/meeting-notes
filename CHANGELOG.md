@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.7.2 — Plainer boxes, messages and empty lists (20 Nov 2026)
+
+### Changed
+- **No more browser pop-ups.** Moving a meeting to the trash, deleting it forever and renaming now use Notewell's own boxes, and the buttons say what they do ("Move to trash", "Keep", "Delete forever").
+- **When something does not load, it says so and offers Try again.** Before, a failed list just stayed empty or showed an error number.
+- **Empty lists explain themselves.** "No meetings yet", "Nothing matches" (with Clear search) and "The trash is empty" each say what to do next.
+- **The trash button is always visible** on a meeting, not only when the mouse is over it.
+- **No text smaller than 12 px.**
+
 ## 2.7.0 — New look, and laptop fixes (20 Nov 2026)
 
 What changed since 2.6.1: the app now looks like the website, plus the laptop fixes below.
