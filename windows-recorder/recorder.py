@@ -1509,6 +1509,29 @@ def is_meeting_active(cfg):
         return False
 
 
+def sound_test_verdict(levels, speaker_name):
+    """The tray sound test's result in plain words. levels holds "call" (what the speakers
+    play) and "mic", each a loudness number or the error text if that side could not be
+    opened. Returns (everything heard, message)."""
+    ok, lines, fixes = True, [], []
+    for key, what in (("call", f"Call sound on {speaker_name}"), ("mic", "Your microphone")):
+        v = levels.get(key)
+        if isinstance(v, (int, float)) and v > 0.01:
+            lines.append(f"{what}: heard clearly.")
+            continue
+        if isinstance(v, (int, float)) and v > 0.001:
+            lines.append(f"{what}: heard, but very quietly.")
+            continue
+        ok = False
+        lines.append(f"{what}: " + ("silence." if isinstance(v, (int, float))
+                                    else f"could not be opened ({str(v)[:80]})."))
+        fixes.append("Turn the volume up, or pick the speakers or headset you use for calls"
+                     " under Audio source." if key == "call" else
+                     "Check the microphone is not muted, and that Windows and Kaspersky"
+                     " let Notewell use it.")
+    return ok, "\n".join(lines + ([""] + fixes if fixes else ["", "Meetings will record both sides."]))
+
+
 # -----------------------------------------------------------------
 # Tray icon (using pystray)
 # -----------------------------------------------------------------
@@ -1728,7 +1751,10 @@ def main(hooks=None):
                    else "disabled")
 
     def _test_audio(icon_, item):
-        """Capture 5 seconds and report RMS level — lets user verify the right device is being captured."""
+        """Plays a short beep and listens 5 seconds to both sides a meeting records: what the
+        speakers play (the call) and the microphone (you). Says what it heard in a box that
+        stays on screen. Before 2.7.1 it only listened to the speakers, in silence, and
+        reported in a notification that was easy to miss."""
         import threading as _th
         def _run():
             try:
@@ -1740,25 +1766,37 @@ def main(hooks=None):
                 else:
                     matches = [s for s in sc.all_speakers() if s.name == source or str(s.name).startswith(source)]
                     speaker = matches[0] if matches else sc.default_speaker()
-                log.info(f"Test audio: capturing 5s from '{speaker.name}'")
-                notify("Testing audio...", f"Play something on {speaker.name} now. Listening for 5s.")
-                mic = sc.get_microphone(id=str(speaker.name), include_loopback=True)
-                sr = cfg.get("sample_rate", 16000)
-                with mic.recorder(samplerate=sr, channels=1, blocksize=soundgaps.blocksize(sr)) as rec:
-                    data = rec.record(numframes=cfg.get("sample_rate", 16000) * 5)
-                audio = data.flatten().astype(np.float32)
-                rms = float(np.sqrt(np.mean(audio ** 2)))
-                peak = float(np.max(np.abs(audio)))
-                log.info(f"Test audio done: RMS={rms:.4f}, peak={peak:.4f}")
-                if rms > 0.01:
-                    notify("Audio OK ✓", f"'{speaker.name}' captured audio. RMS={rms:.3f}, peak={peak:.2f}")
-                elif rms > 0.001:
-                    notify("Audio faint", f"'{speaker.name}': very quiet. RMS={rms:.3f}. Turn up volume.")
-                else:
-                    notify("No audio ✗", f"'{speaker.name}' returned silence. Try another device via Audio Source menu.")
+                sr, secs, levels = cfg.get("sample_rate", 16000), 5, {}
+
+                def listen(key, dev):
+                    try:
+                        with dev.recorder(samplerate=sr, channels=1, blocksize=soundgaps.blocksize(sr)) as rec:
+                            levels[key] = float(np.sqrt(np.mean(rec.record(numframes=sr * secs) ** 2)))
+                    except Exception as e:
+                        levels[key] = f"{type(e).__name__}: {e}"
+
+                log.info(f"Test audio: beep and 5s on '{speaker.name}' and the default microphone")
+                notify("Testing the sound (5 seconds)", "You will hear a short beep. Say a few words now.")
+                ears = [_th.Thread(target=listen, args=("call", sc.get_microphone(id=str(speaker.name), include_loopback=True))),
+                        _th.Thread(target=listen, args=("mic", sc.default_microphone()))]
+                for t in ears:
+                    t.start()
+                time.sleep(0.7)
+                t_ = np.arange(int(48000 * 1.2)) / 48000
+                speaker.play((0.2 * np.sin(2 * np.pi * 660 * t_)).astype(np.float32), samplerate=48000)
+                for t in ears:
+                    t.join(timeout=secs + 10)
+                ok, text = sound_test_verdict(levels, speaker.name)
+                log.info(f"Test audio done: {levels}")
             except Exception as e:
                 log.exception("test_audio failed")
-                notify("Test failed", f"{type(e).__name__}: {str(e)[:80]}")
+                ok, text = False, f"The test could not run: {type(e).__name__}: {str(e)[:80]}"
+            try:                    # 0x40 information / 0x30 warning, on top of other windows
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(0, text, "Notewell sound test",
+                                                 (0x40 if ok else 0x30) | 0x40000 | 0x10000)
+            except Exception:
+                notify("Notewell sound test", text[:250])
         _th.Thread(target=_run, daemon=True).start()
 
     def _make_source_picker(device_name):
