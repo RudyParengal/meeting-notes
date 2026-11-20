@@ -13,6 +13,7 @@
 - **Logs stay small.** notewell.log, recorder.log and screen.log each start a fresh file at 5 MB and keep the 3 newest old ones.
 
 ### Added
+- **The version is shown and sent.** The bottom of Settings and the tray tooltip say "Notewell 2.7.0". Every request to the linked server, the sign-in and each meeting sent carry the version (`X-Notewell-Version`, and `User-Agent: Notewell/2.7.0`), so the server's log shows which version each laptop runs.
 - `Notewell.exe --sound-check` records 2 minutes of a test tone and writes how many sound gaps it found to `sound-check.txt` in the Notewell folder.
 
 ## 2.6.1 — Updated add-on software (unreleased)

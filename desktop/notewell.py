@@ -226,6 +226,8 @@ def run() -> None:
     import recorder
     import recorder_bridge
     recorder.ARCHIVE_ROOT = HOME / "archive"      # not the standalone recorder's MeetingArchive
+    version = server.config.__version__
+    recorder.APP_VERSION = version                # tray tooltip, and sent with each meeting
     recorder.KEYS.update(recorder_keys)
 
     srv = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=port,
@@ -238,7 +240,7 @@ def run() -> None:
         return held["dictation"].store if held.get("dictation") else None
 
     try:
-        held["link"] = linked_server.start(HOME, server.storage, ADMIN, dictation=word_store)
+        held["link"] = linked_server.start(HOME, server.storage, ADMIN, dictation=word_store, version=version)
     except Exception:
         logging.getLogger("linked").exception("linked-server.json could not be used")
 
@@ -250,7 +252,7 @@ def run() -> None:
         """Sign this PC in with its own pass. Meetings, notes and dictation use it
         from the next request; nothing has to restart."""
         name = f"Notewell on {os.environ.get('COMPUTERNAME') or 'this PC'}"
-        new_pass = linked_server.sign_in(HOME, url, email, password, name)
+        new_pass = linked_server.sign_in(HOME, url, email, password, name, version=version)
         keys = prepare_recorder_config(port, key)        # re-reads linked-server.json
         recorder.KEYS.update(keys)
         cfg = held.get("cfg")
@@ -259,7 +261,7 @@ def run() -> None:
         if held.get("link"):
             held["link"].set_key(new_pass, url)
         else:
-            held["link"] = linked_server.start(HOME, server.storage, ADMIN, dictation=word_store)
+            held["link"] = linked_server.start(HOME, server.storage, ADMIN, dictation=word_store, version=version)
         logging.getLogger("linked").info("signed in to %s as %s", held["link"].url, email)
         return account_status()
 

@@ -887,6 +887,7 @@ function renderSettings() {
   if (rec) page.appendChild(recordingCard());
   if (rec) page.appendChild(h('div', { id: 'dictation-cards' }));
   if (!rec) page.appendChild(peopleCard());
+  if (currentUser.version) page.appendChild(h('p', { class: 'dim', id: 'app-version', style: 'margin:24px 0 0' }, 'Notewell ' + currentUser.version));
   main.appendChild(page);
   if (rec) { loadAccount(); loadDictation(); }
 }

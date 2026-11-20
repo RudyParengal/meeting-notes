@@ -107,6 +107,15 @@ ARCHIVE_ROOT = Path.home() / "MeetingArchive"
 # One line per meeting the server took: its audio and transcript copies and its note id,
 # so they are only cleared once the server has the note. No keys in it.
 SENT_LIST = "sent-meetings.jsonl"
+APP_VERSION = ""   # set by the desktop app; sent with each meeting and shown in the tray (2.7.0)
+
+
+def tray_tip():
+    return f"Notewell {APP_VERSION}" if APP_VERSION else "Notewell"
+
+
+def version_header():
+    return {"X-Notewell-Version": APP_VERSION} if APP_VERSION else {}
 
 
 def _is_loopback(url: str) -> bool:
@@ -670,7 +679,7 @@ def upload(transcript, duration, cfg, meeting_type="auto"):
     session_id = uuid.uuid4().hex
     resp = requests.post(
         cfg["api_url"].rstrip("/") + "/transcribe",
-        headers={"X-API-Key": cfg["api_key"], "Content-Type": "application/json"},
+        headers={"X-API-Key": cfg["api_key"], "Content-Type": "application/json", **version_header()},
         json={
             "session_id": session_id,
             "transcript": transcript,
@@ -1837,7 +1846,7 @@ def main(hooks=None):
 
     log.info("startup: tray menu built")
     if hooks:
-        icon = pystray.Icon("notewell", icon_idle, "Notewell", menu)
+        icon = pystray.Icon("notewell", icon_idle, tray_tip(), menu)
     else:
         icon = pystray.Icon("meeting-recorder", icon_idle, "Meeting Recorder", menu)
 

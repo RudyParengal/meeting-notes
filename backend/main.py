@@ -577,7 +577,8 @@ def login(req: LoginRequest, request: Request):
 
 @app.get("/me")
 def me(user: dict = Depends(current_user)):
-    return {"email": user["email"], "name": user.get("name", ""), "role": user.get("role", "member")}
+    return {"email": user["email"], "name": user.get("name", ""), "role": user.get("role", "member"),
+            "version": config.__version__}
 
 
 @app.post("/logout")

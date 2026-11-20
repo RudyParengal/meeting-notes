@@ -65,14 +65,21 @@ def _https(url: str) -> str:
     return url
 
 
-def sign_in(home: Path, url: str, email: str, password: str, device_name: str) -> str:
+def agent(version: str = "") -> dict:
+    """Which Notewell is asking: the server sees it on every request (2.7.0)."""
+    if not version:
+        return {"User-Agent": "Notewell"}
+    return {"User-Agent": f"Notewell/{version}", "X-Notewell-Version": version}
+
+
+def sign_in(home: Path, url: str, email: str, password: str, device_name: str, version: str = "") -> str:
     """Swap email + password for this PC's own device pass, and keep it in
     linked-server.json (sealed to this Windows user). The file it replaces is
     kept beside it as linked-server.json.bak-<time>. Returns the pass, which
     the caller hands to the recorder; it is never logged."""
     url = _https(url)
     r = requests.post(url + "/auth/device-signin", timeout=30, allow_redirects=False,
-                      headers={"User-Agent": "Notewell"},
+                      headers=agent(version),
                       json={"email": email.strip(), "password": password, "device_name": device_name[:80]})
     if r.status_code in (401, 429):
         try:
@@ -93,7 +100,7 @@ def sign_in(home: Path, url: str, email: str, password: str, device_name: str) -
 
 
 class Link:
-    def __init__(self, home: Path, storage, owner: str, dictation=None):
+    def __init__(self, home: Path, storage, owner: str, dictation=None, version: str = ""):
         cfg = read_link(home)
         self.url = _https(cfg["url"])
         self.http = requests.Session()
@@ -104,7 +111,7 @@ class Link:
         again = HTTPAdapter(max_retries=Retry(total=2, backoff_factor=0.5, status=0))
         self.http.mount("https://", again)
         self.http.mount("http://", again)
-        self.http.headers.update({"X-API-Key": cfg["api_key"], "User-Agent": "Notewell"})
+        self.http.headers.update({"X-API-Key": cfg["api_key"], **agent(version)})
         self.dictation = dictation or (lambda: None)   # the word store, once dictation has started
         self.storage, self.owner = storage, owner
         self.state_file = home / "linked-state.json"
@@ -327,11 +334,11 @@ class Link:
             self.wake.clear()
 
 
-def start(home: Path, storage, owner: str, dictation=None):
+def start(home: Path, storage, owner: str, dictation=None, version: str = ""):
     """Start syncing in the background if linked-server.json exists; else do nothing."""
     if not (home / "linked-server.json").exists():
         return None
-    link = Link(home, storage, owner, dictation)
+    link = Link(home, storage, owner, dictation, version)
     threading.Thread(target=link.run, daemon=True, name="linked").start()
     log.info("linked to %s", link.url)
     return link
