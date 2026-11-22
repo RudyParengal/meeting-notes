@@ -308,7 +308,7 @@ def run() -> None:
         screen = screen_record.ScreenService(
             HOME, child_command("--screen-record"), get_link=lambda: held.get("link"),
             notify=lambda title, msg: hooks["notify"](title, msg) if hooks.get("notify") else None,
-            flash=_screen_flash)
+            flash=_screen_flash, shot_cmd=child_command("--screen-shot"))
         hooks["screen"] = screen
         recorder_bridge.attach_screen(screen)
     except Exception:
@@ -370,6 +370,18 @@ if __name__ == "__main__":
             out.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} sound check, 2 minutes of a faint test tone\n")
             soundgaps.tone_check(say=lambda line: (out.write(line + "\n"), out.flush()))
         sys.exit(0)
+    if "--screen-shot" in sys.argv:               # one screenshot, started by ScreenService
+        sys.path[:0] = [str(ROOT / "windows-recorder")]
+        (HOME / "recorder").mkdir(parents=True, exist_ok=True)
+        import logfiles                           # 5 MB, 3 old copies kept
+        logging.basicConfig(level=logging.INFO, handlers=[logfiles.handler(HOME / "recorder" / "screen.log")],
+                            format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        import screen_record
+        try:
+            sys.exit(screen_record.shot_main())
+        except Exception:
+            logging.getLogger("screen").exception("screenshot failed")
+            sys.exit(1)
     if "--screen-record" in sys.argv:             # one screen recording, started by ScreenService
         sys.path[:0] = [str(ROOT / "windows-recorder")]
         (HOME / "recorder").mkdir(parents=True, exist_ok=True)

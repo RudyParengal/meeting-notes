@@ -32,6 +32,7 @@ log = logging.getLogger("screen")
 FPS = 15
 SENT_KEEP_DAYS = 7
 DEFAULT_HOTKEY = "ctrl+shift+r"
+DEFAULT_SHOT_HOTKEY = "ctrl+shift+s"
 WDA_EXCLUDEFROMCAPTURE = 0x11
 
 # ------------------------------------------------------- never-record list ---
@@ -286,6 +287,62 @@ def set_clipboard_text(text: str) -> bool:
             ctypes.memmove(k32.GlobalLock(h), data, len(data))
             k32.GlobalUnlock(h)
             if not u32.SetClipboardData(13, h):              # CF_UNICODETEXT; Windows owns h now
+                k32.GlobalFree(h)
+                return False
+            return True
+        finally:
+            u32.CloseClipboard()
+    finally:
+        if hwnd:
+            u32.DestroyWindow(hwnd)
+
+
+def build_dib(bgra) -> bytes:
+    """Build a 32-bit bottom-up CF_DIB byte buffer from an H x W x 4 BGRA uint8 array."""
+    import struct
+    import numpy as np
+    arr = np.asarray(bgra, dtype=np.uint8)
+    if arr.ndim != 3 or arr.shape[2] != 4:
+        raise ValueError("expected H x W x 4 BGRA array")
+    h, w = int(arr.shape[0]), int(arr.shape[1])
+    pixels = np.ascontiguousarray(arr[::-1].copy())
+    pixels[:, :, 3] = 255
+    header = struct.pack("<IiiHHIIiiII", 40, w, h, 1, 32, 0, w * h * 4, 0, 0, 0, 0)
+    return header + pixels.tobytes()
+
+
+def set_clipboard_dib(dib_bytes: bytes) -> bool:
+    """Put a CF_DIB (format 8) image on the Windows clipboard."""
+    ctypes, W = _win()
+    u32 = ctypes.WinDLL("user32", use_last_error=True)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    u32.CreateWindowExW.restype = W.HWND
+    u32.CreateWindowExW.argtypes = [W.DWORD, W.LPCWSTR, W.LPCWSTR, W.DWORD, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int, W.HWND, W.HMENU, W.HINSTANCE, W.LPVOID]
+    u32.OpenClipboard.argtypes = [W.HWND]
+    u32.SetClipboardData.restype = W.HANDLE
+    u32.SetClipboardData.argtypes = [W.UINT, W.HANDLE]
+    u32.DestroyWindow.argtypes = [W.HWND]
+    k32.GlobalAlloc.restype = W.HGLOBAL
+    k32.GlobalAlloc.argtypes = [W.UINT, ctypes.c_size_t]
+    k32.GlobalLock.restype = W.LPVOID
+    k32.GlobalLock.argtypes = [W.HGLOBAL]
+    k32.GlobalUnlock.argtypes = [W.HGLOBAL]
+    k32.GlobalFree.argtypes = [W.HGLOBAL]
+    hwnd = u32.CreateWindowExW(0, "STATIC", "notewell-clip", 0, 0, 0, 0, 0, W.HWND(-3), None, None, None)
+    try:
+        for _ in range(20):
+            if u32.OpenClipboard(hwnd):
+                break
+            time.sleep(0.05)
+        else:
+            return False
+        try:
+            u32.EmptyClipboard()
+            h = k32.GlobalAlloc(0x0002, len(dib_bytes))
+            ctypes.memmove(k32.GlobalLock(h), dib_bytes, len(dib_bytes))
+            k32.GlobalUnlock(h)
+            if not u32.SetClipboardData(8, h):              # CF_DIB; Windows owns h now
                 k32.GlobalFree(h)
                 return False
             return True
@@ -1112,6 +1169,7 @@ EFFECTS = {
     "start":   ("#EF4444", "\u25cf  Recording", "Press {key} again to stop"),
     "stop":    ("#828CFF", "\u25a0  Stopped", "Getting your link\u2026"),
     "copied":  ("#10B981", "\u2713  Link copied", "Ready to paste: Ctrl+V"),
+    "shot":    ("#10B981", "\u2713  Screenshot copied", "Ready to paste: Ctrl+V"),
     "waiting": ("#F59E0B", "Saved on this PC", "The link is copied when it uploads"),
 }
 
@@ -1169,6 +1227,143 @@ def show_effect(root, tk, area, kind, key="", ms=1600):
         root.after(50, fade, step - 1)
     root.after(max(0, ms - 300), fade)
     return wins
+
+
+def _pick_shot(root, monitor, tk):
+    """Ask whole screen (Enter) or dragged area (R). Returns (True, region) or None on cancel."""
+    choice = {"val": None}
+    win = tk.Toplevel(root)
+    win.title("Take a screenshot")
+    win.attributes("-topmost", True)
+    win.configure(bg="#1C1926", padx=18, pady=14)
+    tk.Label(win, text="Take a screenshot", fg="#ECEAF3", bg="#1C1926",
+             font=("Segoe UI", 12, "bold")).pack(anchor="w")
+
+    def whole(e=None):
+        choice["val"] = (True, None)
+        win.destroy()
+
+    def area(e=None):
+        win.withdraw()
+        rect = _drag_region(root, monitor, tk, prompt="Drag an area for the screenshot. Esc to go back.")
+        if rect is None:
+            win.deiconify()
+            win.focus_force()
+            return
+        try:
+            clipped = _clip_region(monitor, rect)
+        except ValueError:
+            win.deiconify()
+            win.focus_force()
+            return
+        choice["val"] = (True, clipped)
+        win.destroy()
+
+    w, h = monitor[2], monitor[3]
+    tk.Button(win, text=f"Enter   Whole screen, {w}x{h}", anchor="w", width=40, command=whole,
+              relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
+              font=("Segoe UI", 10)).pack(fill="x", pady=3)
+    tk.Button(win, text="R   Drag an area...", anchor="w", width=40, command=area,
+              relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
+              font=("Segoe UI", 10)).pack(fill="x", pady=3)
+    tk.Label(win, text="Enter = whole screen.  R = drag area.  Esc = cancel.", fg="#B9B5C6",
+             bg="#1C1926", font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0))
+    win.bind("<Return>", whole)
+    win.bind("r", area)
+    win.bind("R", area)
+    win.bind("<Escape>", lambda e: win.destroy())
+    _centre(win, monitor)
+    win.focus_force()
+    root.wait_window(win)
+    return choice["val"]
+
+
+def _save_png(frame, path: Path):
+    import av
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rgb = frame.reformat(format="rgb24")
+    with av.open(str(path), "w", format="image2") as out:
+        stream = out.add_stream("png")
+        stream.width = rgb.width
+        stream.height = rgb.height
+        stream.pix_fmt = "rgb24"
+        for pkt in stream.encode(rgb):
+            out.mux(pkt)
+        for pkt in stream.encode():
+            out.mux(pkt)
+
+
+def shot_main() -> int:
+    """`Notewell.exe --screen-shot`: grab one frame, save PNG, copy CF_DIB, show toast."""
+    import ctypes
+    import ctypes.wintypes
+    try:
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    except Exception:
+        pass
+    import av
+    import numpy  # noqa: F401
+    test_source = os.environ.get("NOTEWELL_SCREEN_TEST_SOURCE")
+    shot_dir = Path(os.environ["NOTEWELL_SHOT_DIR"]) if os.environ.get("NOTEWELL_SHOT_DIR") else (
+        Path(os.environ.get("USERPROFILE") or str(Path.home())) / "Pictures" / "Notewell")
+    auto = bool(os.environ.get("NOTEWELL_SHOT_AUTO"))
+
+    screens = monitors()
+    pt = ctypes.wintypes.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+    mon_idx = next((i for i, (x, y, w, h) in enumerate(screens)
+                    if x <= pt.x < x + w and y <= pt.y < y + h), 0)
+    mon = screens[mon_idx]
+
+    root = None
+    tk = None
+    region = None
+    if test_source:
+        source = test_source
+    else:
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        if auto:
+            raw_r = os.environ.get("NOTEWELL_SCREEN_REGION")
+            if raw_r:
+                region = _clip_region(mon, tuple(int(v) for v in raw_r.split(",")))
+        else:
+            picked = _pick_shot(root, mon, tk)
+            if picked is None:
+                root.destroy()
+                return 0
+            _, region = picked
+        area = region or mon
+        reasons = never_record_reasons(visible_windows(area))
+        if reasons and not _warn(root, reasons, mon, tk):
+            root.destroy()
+            return 0
+        root.update()
+        time.sleep(0.05)
+        source = capture_source(mon_idx, mon, region)
+
+    with av.open(source, format="lavfi") as src:
+        frame = next(src.decode(video=0))
+    stamp = time.strftime("%Y-%m-%d %H-%M-%S")
+    out_path = shot_dir / f"Screenshot {stamp}.png"
+    n = 1
+    while out_path.exists():
+        out_path = shot_dir / f"Screenshot {stamp}-{n}.png"
+        n += 1
+    _save_png(frame, out_path)
+    log.info("saved screenshot %s (%dx%d)", out_path.name, frame.width, frame.height)
+
+    if not test_source:
+        bgra = frame.reformat(format="bgra").to_ndarray()
+        set_clipboard_dib(build_dib(bgra))
+        show_effect(root, tk, mon, "shot", ms=1800)
+        end_at = time.monotonic() + 1.9
+        while time.monotonic() < end_at:
+            root.update()
+            time.sleep(0.03)
+        root.destroy()
+    return 0
 
 
 def flash_main(kind, area=None) -> int:
@@ -1717,9 +1912,10 @@ def _poll_dialog(root, stop_asked, show):
 class ScreenService:
     """Hotkey, start/stop the recording copy, upload queue, clipboard."""
 
-    def __init__(self, home: Path, child_cmd, get_link, notify, cfg=None, flash=None):
+    def __init__(self, home: Path, child_cmd, get_link, notify, cfg=None, flash=None, shot_cmd=None):
         self.box = Outbox(Path(home) / "screen")
         self.child_cmd = list(child_cmd)
+        self.shot_cmd = list(shot_cmd) if shot_cmd is not None else None
         self.get_link = get_link            # -> linked_server.Link or None
         self.notify = notify                # (title, message)
         self.flash = flash or (lambda kind: None)   # (kind): a moment of colour on screen
@@ -1761,6 +1957,14 @@ class ScreenService:
 
     def hotkey(self):
         return self.cfg.get("screen_hotkey") or DEFAULT_HOTKEY
+
+    def shot_hotkey(self):
+        return self.cfg.get("screenshot_hotkey") or DEFAULT_SHOT_HOTKEY
+
+    def take_screenshot(self):
+        if not self.shot_cmd:
+            return
+        subprocess.Popen(self.shot_cmd, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
     def label(self):
         return "Stop screen recording" if self.recording else f"Record screen ({hotkey_label(self.hotkey())})"
@@ -1895,21 +2099,40 @@ class ScreenService:
         import ctypes
         from ctypes import wintypes as W
         u32 = ctypes.windll.user32
+        registered = 0
         try:
             mods, vk = parse_hotkey(self.hotkey())
+            if u32.RegisterHotKey(None, 0x5C2E, mods | 0x4000, vk):      # MOD_NOREPEAT
+                log.info("screen hotkey %s ready", hotkey_label(self.hotkey()))
+                registered += 1
+            else:
+                log.warning("screen hotkey %s is taken by another program", self.hotkey())
+                self.notify("Screen recording", f"{hotkey_label(self.hotkey())} is already used by another "
+                            "program. Use “Record screen” in the Notewell menu instead.")
         except ValueError as e:
             log.warning("screen hotkey: %s", e)
+
+        try:
+            s_mods, s_vk = parse_hotkey(self.shot_hotkey())
+            if u32.RegisterHotKey(None, 0x5C2F, s_mods | 0x4000, s_vk):  # MOD_NOREPEAT
+                log.info("screenshot hotkey %s ready", hotkey_label(self.shot_hotkey()))
+                registered += 1
+            else:
+                log.warning("screenshot hotkey %s is taken by another program", self.shot_hotkey())
+                self.notify("Screenshot", f"{hotkey_label(self.shot_hotkey())} is already used by another "
+                            "program.")
+        except ValueError as e:
+            log.warning("screenshot hotkey: %s", e)
+
+        if not registered:
             return
-        if not u32.RegisterHotKey(None, 0x5C2E, mods | 0x4000, vk):      # MOD_NOREPEAT
-            log.warning("screen hotkey %s is taken by another program", self.hotkey())
-            self.notify("Screen recording", f"{hotkey_label(self.hotkey())} is already used by another "
-                        "program. Use “Record screen” in the Notewell menu instead.")
-            return
-        log.info("screen hotkey %s ready", hotkey_label(self.hotkey()))
         msg = W.MSG()
         while u32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
             if msg.message == 0x0312:                                     # WM_HOTKEY
                 try:
-                    self.toggle()
+                    if msg.wParam == 0x5C2F:
+                        self.take_screenshot()
+                    else:
+                        self.toggle()
                 except Exception:
-                    log.exception("screen hotkey toggle failed")
+                    log.exception("screen hotkey action failed")

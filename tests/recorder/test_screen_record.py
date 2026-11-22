@@ -943,8 +943,52 @@ def t_record_with_mask_hides_top_left():
 check("drawing strokes use red round lines and fade after 3 s", t_draw_stroke_fades_after_3s)
 check("mask_frame flattens each 16x16 block inside the rect and leaves the rest untouched",
       t_mask_frame_pixelates_and_leaves_rest)
+def t_shot_main_saves_png_with_test_source():
+    import av
+    shot_dir = tmp() / "shots"
+    env = {**os.environ,
+           "NOTEWELL_SCREEN_TEST_SOURCE": "testsrc=size=320x240:rate=15",
+           "NOTEWELL_SHOT_DIR": str(shot_dir)}
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); import screen_record; "
+            "sys.exit(screen_record.shot_main())")
+    r = subprocess.run([sys.executable, "-c", code, MODDIR], env=env, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, (r.returncode, r.stderr)
+    pngs = list(shot_dir.glob("Screenshot *.png"))
+    assert len(pngs) == 1, pngs
+    with av.open(str(pngs[0])) as c:
+        frame = next(c.decode(video=0))
+        assert (frame.width, frame.height) == (320, 240), (frame.width, frame.height)
+
+
+def t_build_dib_header_bytes():
+    import struct
+    import numpy as np
+    bgra = np.zeros((10, 12, 4), dtype=np.uint8)
+    bgra[0, 0] = [10, 20, 30, 0]     # top-left becomes bottom-left in bottom-up DIB
+    dib = sr.build_dib(bgra)
+    assert len(dib) == 40 + 10 * 12 * 4, len(dib)
+    biSize, w, h, planes, bpp, comp, img_size = struct.unpack_from("<IiiHHII", dib, 0)
+    assert (biSize, w, h, planes, bpp, comp, img_size) == (40, 12, 10, 1, 32, 0, 480)
+    # Row 0 of bottom-up DIB is row 9 of input; row 9 of bottom-up DIB is row 0 of input (with alpha=255)
+    last_row_off = 40 + 9 * 12 * 4
+    assert list(dib[last_row_off:last_row_off + 4]) == [10, 20, 30, 255]
+
+
+def t_shot_hotkey_default_and_config():
+    svc = sr.ScreenService(tmp(), ["unused"], get_link=lambda: None, notify=lambda t, m: None)
+    assert sr.parse_hotkey(svc.shot_hotkey()) == (0x6, 0x53), svc.shot_hotkey()    # Ctrl+Shift+S
+    svc.cfg["screenshot_hotkey"] = "ctrl+alt+p"
+    assert sr.parse_hotkey(svc.shot_hotkey()) == (0x3, 0x50)
+
+
 check("recording with mask 0,0,64,64 decodes with flat 16x16 blocks in top-left",
       t_record_with_mask_hides_top_left)
+check("shot_main with test source saves a decodable PNG without any dialog",
+      t_shot_main_saves_png_with_test_source)
+check("build_dib writes a valid 40-byte BITMAPINFOHEADER and bottom-up BGRA pixels",
+      t_build_dib_header_bytes)
+check("screenshot hotkey defaults to Ctrl+Shift+S and reads screenshot_hotkey from config",
+      t_shot_hotkey_default_and_config)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)
