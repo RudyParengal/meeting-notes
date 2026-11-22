@@ -48,34 +48,37 @@ class Writer:
         self.max_bytes = MAX_BYTES if max_bytes is None else max_bytes
         self.lines = self.bytes = 0
         self.cut = False
+        self._lock = threading.Lock()
         self._f = open(self.path, "w", encoding="utf-8", newline="\n")
 
     def line(self, obj):
-        if self._f is None or self.cut:
-            return False
-        raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n"
-        size = len(raw.encode("utf-8"))
-        if self.lines >= self.max_lines or self.bytes + size > self.max_bytes:
-            self.cut = True
-            return False
-        self._f.write(raw)
-        self._f.flush()
-        self.lines += 1
-        self.bytes += size
-        return True
+        with self._lock:
+            if self._f is None or self.cut:
+                return False
+            raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n"
+            size = len(raw.encode("utf-8"))
+            if self.lines >= self.max_lines or self.bytes + size > self.max_bytes:
+                self.cut = True
+                return False
+            self._f.write(raw)
+            self._f.flush()
+            self.lines += 1
+            self.bytes += size
+            return True
 
     def end(self, t):
-        if self._f is None:
-            return
-        try:
-            obj = {"t": int(t), "k": "end", "lines": self.lines, "cut": bool(self.cut)}
-            self._f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
-            self._f.flush()
-        finally:
+        with self._lock:
+            if self._f is None:
+                return
             try:
-                self._f.close()
+                obj = {"t": int(t), "k": "end", "lines": self.lines, "cut": bool(self.cut)}
+                self._f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
+                self._f.flush()
             finally:
-                self._f = None
+                try:
+                    self._f.close()
+                finally:
+                    self._f = None
 
 
 class Typing:
@@ -304,6 +307,14 @@ class Watcher:
         if self.probe is not None:
             self._thread = threading.Thread(target=self._run, daemon=True, name="screen-events")
             self._thread.start()
+
+    def write_event(self, obj):
+        """Thread-safe write for external event sources (e.g. the local browser bridge)."""
+        if self._stopped or self._writer is None:
+            return False
+        if self.paused is not None and self.paused():
+            return False
+        return self._writer.line(obj)
 
     def step(self, now, windows=True):
         if self.probe is None:

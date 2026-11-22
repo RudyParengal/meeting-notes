@@ -1423,6 +1423,28 @@ def stop_events(w):
             log.exception("screen events did not stop cleanly")
 
 
+def start_bridge(box, cap, watcher, test_mode):
+    """Start the localhost extension bridge while recording. Never raises; skipped in test_mode."""
+    if test_mode or watcher is None:
+        return None
+    try:
+        import screen_bridge
+        b = screen_bridge.Bridge(box.root, cap.video_ms, watcher.write_event)
+        b.start()
+        return b
+    except Exception:
+        log.exception("screen bridge did not start; the video records without browser events")
+        return None
+
+
+def stop_bridge(b):
+    if b is not None:
+        try:
+            b.stop()
+        except Exception:
+            log.exception("screen bridge did not stop cleanly")
+
+
 def parse_trim(start_text, end_text, seconds):
     """Parse trim fields (m:ss); see screen_trim.parse_trim."""
     import screen_trim
@@ -1701,6 +1723,7 @@ def child_main(outbox_dir: str) -> int:
         say(event="error", message=f"Screen recording could not start: {e}")
         return 1
     watcher = start_events(box, job, cap, area, bool(test_source))
+    bridge = start_bridge(box, cap, watcher, bool(test_source))
     say(event="started", client_id=job["client_id"], screen=idx + 1, mic=cap.mic_ok, encoder=cap.encoder)
     effects = not test_source                  # tests never flash the real screen
     if effects:
@@ -1886,6 +1909,7 @@ def child_main(outbox_dir: str) -> int:
         except BaseException as e:
             res["error"] = e
         finally:
+            stop_bridge(bridge)
             stop_events(watcher)
     th = threading.Thread(target=finish, daemon=True)
     th.start()
