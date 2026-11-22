@@ -228,6 +228,7 @@ def run() -> None:
     recorder.ARCHIVE_ROOT = HOME / "archive"      # not the standalone recorder's MeetingArchive
     version = server.config.__version__
     recorder.APP_VERSION = version                # tray tooltip, and sent with each meeting
+    os.environ["NOTEWELL_VERSION"] = version      # the screen recorder child writes it in its events file
     recorder.KEYS.update(recorder_keys)
 
     srv = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=port,
