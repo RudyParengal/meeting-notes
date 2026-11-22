@@ -1039,10 +1039,11 @@ def _show_region_frame(root, tk, area):
     return wins
 
 
-def _pick_screen(root, screens, mouse_idx, tk):
-    """Ask what to record. Returns (screen_idx, region, mic) or None for cancel."""
+def _pick_screen(root, screens, mouse_idx, tk, camera_default=False):
+    """Ask what to record. Returns (screen_idx, region, mic, camera) or None for cancel."""
     choice = {"val": None}
     mic_var = tk.BooleanVar(value=True)
+    cam_var = tk.BooleanVar(value=bool(camera_default))
     win = tk.Toplevel(root)
     win.title("Record which screen?")
     win.attributes("-topmost", True)
@@ -1055,7 +1056,7 @@ def _pick_screen(root, screens, mouse_idx, tk):
              for i in range(len(screens))}
 
     def pick(i, region=None):
-        choice["val"] = (i, region, bool(mic_var.get()))
+        choice["val"] = (i, region, bool(mic_var.get()), bool(cam_var.get()))
         win.destroy()
 
     def pick_window(e=None):
@@ -1101,9 +1102,14 @@ def _pick_screen(root, screens, mouse_idx, tk):
     tk.Button(win, text="R   Drag an area...", anchor="w", width=44, command=pick_area,
               relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
               font=("Segoe UI", 10)).pack(fill="x", pady=3)
-    tk.Checkbutton(win, text="Record sound", variable=mic_var, bg="#1C1926", fg="#ECEAF3",
+    opts = tk.Frame(win, bg="#1C1926")
+    opts.pack(fill="x", pady=(6, 0))
+    tk.Checkbutton(opts, text="Record sound", variable=mic_var, bg="#1C1926", fg="#ECEAF3",
                    selectcolor="#2D2A36", activebackground="#1C1926", activeforeground="#ECEAF3",
-                   font=("Segoe UI", 10)).pack(anchor="w", pady=(6, 0))
+                   font=("Segoe UI", 10)).pack(side="left")
+    tk.Checkbutton(opts, text="Show camera", variable=cam_var, bg="#1C1926", fg="#ECEAF3",
+                   selectcolor="#2D2A36", activebackground="#1C1926", activeforeground="#ECEAF3",
+                   font=("Segoe UI", 10)).pack(side="left", padx=(16, 0))
     tk.Label(win, text="Enter = whole screen with mouse.  W = window.  R = area.  Esc = cancel.",
              fg="#B9B5C6", bg="#1C1926", font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0))
     win.bind("w", pick_window)
@@ -1626,6 +1632,10 @@ def child_main(outbox_dir: str) -> int:
                 continue
             if cmd == "stop":
                 stop_asked.set()
+                with cmd_lock:
+                    fn = cmd_handler["fn"]
+                if fn is not None:
+                    fn(cmd)
                 continue
             if cmd in ("send", "discard") or cmd.startswith("trim "):
                 review_cmds.append(cmd)
@@ -1655,13 +1665,16 @@ def child_main(outbox_dir: str) -> int:
         idx = int(test_pick) if test_pick is not None else (0 if test_source else mouse)
         raw_area = test_area if test_source else env_region
         region = tuple(int(v) for v in raw_area.split(",")) if raw_area else None
-        want_mic = True
+        want_mic, want_cam = True, False
     else:
-        picked = _poll_dialog(root, stop_asked, lambda: _pick_screen(root, screens, mouse, tk))
+        cam_default = os.environ.get("NOTEWELL_SCREEN_CAMERA") == "1"
+        picked = _poll_dialog(root, stop_asked,
+                              lambda: _pick_screen(root, screens, mouse, tk, camera_default=cam_default))
         if picked is None:
             say(event="cancelled")
             return 0
-        idx, region, want_mic = picked
+        idx, region, want_mic, want_cam = picked
+        say(event="camera_pref", enabled=want_cam)
     mon = screens[idx] if idx < len(screens) else screens[0]
     if region is not None and not test_source:
         region = _clip_region(mon, region)
@@ -1694,6 +1707,22 @@ def child_main(outbox_dir: str) -> int:
         key = hotkey_label(os.environ.get("NOTEWELL_SCREEN_HOTKEY") or DEFAULT_HOTKEY)
         show_effect(root, tk, mon, "start", key=key, ms=1800)
     region_frame = _show_region_frame(root, tk, area) if (region is not None and not test_source) else []
+    cam_bubble = None
+    if want_cam and not test_source:
+        try:
+            import screen_camera
+            cams = screen_camera.list_cameras()
+            if cams:
+                cam_bubble = screen_camera.CameraBubble(root, tk, area, camera_name=cams[0])
+                if not cam_bubble.start():
+                    cam_bubble = None
+                    say(event="notice", message="Could not open the camera. Recording without it.")
+            else:
+                say(event="notice", message="No camera found. Recording without it.")
+        except Exception as e:
+            log.warning("camera bubble failed: %s", e)
+            cam_bubble = None
+            say(event="notice", message="Could not open the camera. Recording without it.")
 
     badge = tk.Toplevel(root)
     badge.overrideredirect(True)
@@ -1790,7 +1819,9 @@ def child_main(outbox_dir: str) -> int:
              idx + 1, area[2], area[3], cap.encoder, cap.mic_ok, hidden)
 
     def handle_cmd(cmd):
-        if cmd == "pause":
+        if cmd == "stop":
+            root.quit()
+        elif cmd == "pause":
             set_paused(True)
         elif cmd == "resume":
             set_paused(False)
@@ -1835,7 +1866,11 @@ def child_main(outbox_dir: str) -> int:
     # mainloop() would be lost and Stop would never be noticed.
     root.after(0, tick)
     root.mainloop()
+    with cmd_lock:
+        cmd_handler["fn"] = None
     stopped_at = time.time()
+    if cam_bubble is not None:
+        cam_bubble.stop()
     draw.destroy()
     badge.destroy()
     for edge in region_frame:
@@ -1912,10 +1947,11 @@ def _poll_dialog(root, stop_asked, show):
 class ScreenService:
     """Hotkey, start/stop the recording copy, upload queue, clipboard."""
 
-    def __init__(self, home: Path, child_cmd, get_link, notify, cfg=None, flash=None, shot_cmd=None):
+    def __init__(self, home: Path, child_cmd, get_link, notify, cfg=None, flash=None, shot_cmd=None, save_cfg=None):
         self.box = Outbox(Path(home) / "screen")
         self.child_cmd = list(child_cmd)
         self.shot_cmd = list(shot_cmd) if shot_cmd is not None else None
+        self.save_cfg = save_cfg
         self.get_link = get_link            # -> linked_server.Link or None
         self.notify = notify                # (title, message)
         self.flash = flash or (lambda kind: None)   # (kind): a moment of colour on screen
@@ -1978,7 +2014,8 @@ class ScreenService:
                 self.notify("Screen recording", "Sign in to your server in Notewell Settings first, "
                             "so the recording has somewhere to go. It will still record.")
             env = {**os.environ, "NOTEWELL_SCREEN_DIR": str(self.box.dir),
-                   "NOTEWELL_SCREEN_HOTKEY": self.hotkey()}
+                   "NOTEWELL_SCREEN_HOTKEY": self.hotkey(),
+                   "NOTEWELL_SCREEN_CAMERA": "1" if self.cfg.get("screen_camera") else "0"}
             self.proc = subprocess.Popen(self.child_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                          env=env, text=True, encoding="utf-8",
                                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -2006,6 +2043,15 @@ class ScreenService:
                          ev.get("screen"), ev.get("mic"), ev.get("encoder"))
                 if not ev.get("mic"):
                     self.notify("Screen recording", "Recording without sound: the microphone is not available.")
+            elif kind == "camera_pref":
+                self.cfg["screen_camera"] = bool(ev.get("enabled"))
+                if self.save_cfg is not None:
+                    try:
+                        self.save_cfg()
+                    except Exception:
+                        log.exception("could not save camera preference")
+            elif kind == "notice":
+                self.notify("Screen recording", ev.get("message", ""))
             elif kind == "reviewing":
                 self.started = None
             elif kind == "discarded":

@@ -322,6 +322,7 @@ def run() -> None:
         if screen is not None:                    # a fault here never stops meetings
             try:
                 screen.cfg = ctl["cfg"]
+                screen.save_cfg = ctl.get("save_cfg")
                 screen.start()
             except Exception:
                 logging.getLogger("screen").exception("screen recording could not start")

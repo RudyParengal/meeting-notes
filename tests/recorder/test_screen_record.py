@@ -693,7 +693,7 @@ def t_record_with_pause():
 
 
 def t_stop_while_paused():
-    home, events = _record_script([(1.5, "pause"), (1.0, "stop")])
+    home, events = _record_script([(2.0, "pause"), (1.0, "stop")])
     done = [e for e in events if e.get("event") == "done"]
     assert done and not done[0]["error"], events
     box = sr.Outbox(home / "screen")
@@ -987,8 +987,45 @@ check("shot_main with test source saves a decodable PNG without any dialog",
       t_shot_main_saves_png_with_test_source)
 check("build_dib writes a valid 40-byte BITMAPINFOHEADER and bottom-up BGRA pixels",
       t_build_dib_header_bytes)
+def t_camera_bubble_fake_frames():
+    import tkinter as tk
+    import numpy as np
+    import screen_camera as sc
+
+    # Verify DirectShow log parsing on made-up device lines
+    fake_logs = [
+        (32, "dshow", '"Test Cam One"'), (32, "dshow", " (video)"),
+        (32, "dshow", '"Test Mic"'), (32, "dshow", " (audio)"),
+        (32, "dshow", '"Test Cam Two" (video)\n'),
+    ]
+    assert sc.parse_dshow_cameras(fake_logs) == ["Test Cam One", "Test Cam Two"]
+
+    # Fill the camera bubble window three times from a fake frame source off-screen
+    def fake_frames():
+        for i in range(6):
+            frame = np.full((240, 320, 3), (i * 40) % 256, dtype=np.uint8)
+            yield frame
+            time.sleep(0.05)
+
+    root = tk.Tk()
+    root.withdraw()
+    cam = sc.CameraBubble(root, tk, (-20000, -20000, 640, 480), source_fn=fake_frames, size=120)
+    try:
+        assert cam.start() is True
+        deadline = time.monotonic() + 3.0
+        while cam.updates < 3 and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.02)
+        assert cam.updates >= 3 and cam.error is None, (cam.updates, cam.error)
+    finally:
+        cam.stop()
+        root.destroy()
+
+
 check("screenshot hotkey defaults to Ctrl+Shift+S and reads screenshot_hotkey from config",
       t_shot_hotkey_default_and_config)
+check("camera bubble parses device logs and renders 3 fake frames without error",
+      t_camera_bubble_fake_frames)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)
