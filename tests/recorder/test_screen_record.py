@@ -739,7 +739,56 @@ def t_mute_silences_middle_second():
 
 
 check("stopping while paused still finishes and produces a playable file", t_stop_while_paused)
+def t_capture_source_whole_monitor():
+    s = sr.capture_source(0, (0, 0, 1920, 1080))
+    assert "video_size" not in s and "ddagrab=output_idx=0:framerate=15:draw_mouse=1" in s, s
+
+
+def t_capture_source_region_exact():
+    s = sr.capture_source(1, (1920, 0, 1920, 1080), (2020, 100, 801, 601))
+    expected = "ddagrab=output_idx=1:framerate=15:draw_mouse=1:video_size=800x600:offset_x=100:offset_y=100,hwdownload,format=bgra"
+    assert s == expected, s
+
+
+def t_capture_source_clipped_and_outside():
+    s = sr.capture_source(0, (0, 0, 1920, 1080), (-50, 900, 400, 300))
+    assert "video_size=350x180:offset_x=0:offset_y=900" in s, s
+    try:
+        sr.capture_source(0, (0, 0, 1920, 1080), (2000, 0, 300, 300))
+        raise AssertionError("expected ValueError for region outside monitor")
+    except ValueError:
+        pass
+
+
+def t_header_with_test_area():
+    home, events = _record_script([(1.0, "stop")], env_extra={"NOTEWELL_SCREEN_TEST_AREA": "120,80,640,480"})
+    done = [e for e in events if e.get("event") == "done"]
+    assert done and not done[0]["error"], events
+    box = sr.Outbox(home / "screen")
+    cid = box.waiting()[0]["client_id"]
+    hdr = json.loads(box.events(cid).read_text(encoding="utf-8").splitlines()[0])
+    assert hdr["screen"] == {"x": 120, "y": 80, "w": 640, "h": 480}, hdr
+
+
+def t_pick_windows_excludes_own_pid_and_private():
+    def fake_walk():
+        return [
+            (1, 999, "notewell.exe", "Notewell Badge", (0, 0, 200, 100)),
+            (2, 101, "notepad.exe", "notes.txt - Notepad", (10, 20, 800, 600)),
+            (3, 202, "keepass.exe", "My Vault - KeePass", (50, 50, 700, 500)),
+            (4, 303, "chrome.exe", "Barclays Online Banking", (50, 50, 700, 500)),
+            (5, 404, "code.exe", "   ", (0, 0, 800, 600)),
+        ]
+    got = sr.pick_windows(walk=fake_walk, own_pid=999, blocked_apps={"keepass.exe"})
+    assert got == [(2, "notepad.exe", "notes.txt - Notepad", (10, 20, 800, 600))], got
+
+
 check("muting silences the middle second while keeping audio in step", t_mute_silences_middle_second)
+check("capture_source whole monitor omits video_size", t_capture_source_whole_monitor)
+check("capture_source region builds exact ddagrab offsets and even size", t_capture_source_region_exact)
+check("capture_source clips partial regions and rejects outside ones", t_capture_source_clipped_and_outside)
+check("NOTEWELL_SCREEN_TEST_AREA sets the events header screen", t_header_with_test_area)
+check("pick_windows excludes our own pid and private windows", t_pick_windows_excludes_own_pid_and_private)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)
