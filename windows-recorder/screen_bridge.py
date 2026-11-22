@@ -150,7 +150,7 @@ def validate_event(item, now_ms):
 
 
 class _BridgeHTTPServer(http.server.ThreadingHTTPServer):
-    allow_reuse_address = True
+    allow_reuse_address = False  # on Windows, True lets two programs share a port
     daemon_threads = True
 
 
