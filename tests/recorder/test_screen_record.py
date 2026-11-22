@@ -1024,8 +1024,47 @@ def t_camera_bubble_fake_frames():
 
 check("screenshot hotkey defaults to Ctrl+Shift+S and reads screenshot_hotkey from config",
       t_shot_hotkey_default_and_config)
+def t_rolling_buffer_off_by_default_and_saves_and_blocks_private():
+    import screen_buffer as sb
+
+    # Off by default on ScreenService
+    svc = sr.ScreenService(tmp(), ["unused"], get_link=lambda: None, notify=lambda t, m: None)
+    assert svc.buffer is None and svc.buffer_active is False
+    st = svc.status()
+    assert st["buffer_enabled"] is False and st["buffer_running"] is False
+
+    # Rolling buffer records short test segments, prunes old ones, blocks on private, saves cleanly
+    root = tmp() / "screen"
+    box = sr.Outbox(root)
+    priv = {"reasons": []}
+    buf = sb.RollingBuffer(root, keep_seconds=2.0, segment_seconds=1.0,
+                           source="testsrc=size=320x240:rate=15,realtime",
+                           check_private=lambda: priv["reasons"])
+    buf.start()
+    try:
+        deadline = time.monotonic() + 8.0
+        while len(buf.segment_paths()) < 2 and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert len(buf.segment_paths()) >= 2, buf.segment_paths()
+        # Private window open: save is blocked and no outbox job is created
+        priv["reasons"] = ["a password manager is open (Vault)"]
+        status, info = buf.save_last(box)
+        assert status == "blocked" and info and box.waiting() == [], (status, info)
+        # Clear private window: save produces a playable MP4 in outbox
+        priv["reasons"] = []
+        status, job = buf.save_last(box, title="Replay clip")
+        assert status == "saved" and job["title"] == "Replay clip" and job.get("from_buffer") is True, (status, job)
+        kinds, n = _frames(box.video(job["client_id"]))
+        assert kinds == ["audio", "video"] and n >= 15, (kinds, n)
+    finally:
+        buf.stop()
+    assert not list((root / "buffer").glob("seg-*.mp4"))
+
+
 check("camera bubble parses device logs and renders 3 fake frames without error",
       t_camera_bubble_fake_frames)
+check("rolling last-2-minutes buffer is off by default, blocks private saves, and saves playable clips",
+      t_rolling_buffer_off_by_default_and_saves_and_blocks_private)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)

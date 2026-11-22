@@ -1965,6 +1965,7 @@ class ScreenService:
         self.last_link = None
         self._said_sign_in = False
         self._stopping = False
+        self.buffer = None
 
     # -- life
     def start(self):
@@ -1973,11 +1974,24 @@ class ScreenService:
             self.box.prune_sent()
         except OSError:
             log.exception("could not tidy screen/sent")
+        if self.cfg.get("screen_replay_buffer") is True:
+            try:
+                import screen_buffer
+                self.buffer = screen_buffer.RollingBuffer(self.box.root)
+                self.buffer.start()
+            except Exception:
+                log.exception("could not start rolling last-2-minutes buffer")
+                self.buffer = None
         threading.Thread(target=self._upload_loop, daemon=True, name="screen-upload").start()
         threading.Thread(target=self._hotkey_loop, daemon=True, name="screen-hotkey").start()
 
     def shutdown(self, wait=20):
         """Quit was chosen: finish a recording in progress so it is not lost."""
+        if self.buffer is not None:
+            try:
+                self.buffer.stop()
+            except Exception:
+                log.exception("could not stop rolling buffer cleanly")
         p = self.proc
         if p and p.poll() is None:
             self._send("stop")
@@ -1991,6 +2005,21 @@ class ScreenService:
     def recording(self):
         return self.proc is not None and self.proc.poll() is None
 
+    @property
+    def buffer_active(self):
+        return self.buffer is not None and self.buffer.running
+
+    def save_last_two_minutes(self):
+        if self.buffer is None:
+            return "disabled", None
+        status, info = self.buffer.save_last(self.box)
+        if status == "blocked":
+            self.notify("Last 2 minutes not saved",
+                        "A private window is open: " + "; ".join(info))
+        elif status == "saved":
+            self.wake.set()
+        return status, info
+
     def hotkey(self):
         return self.cfg.get("screen_hotkey") or DEFAULT_HOTKEY
 
@@ -2003,7 +2032,10 @@ class ScreenService:
         subprocess.Popen(self.shot_cmd, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
     def label(self):
-        return "Stop screen recording" if self.recording else f"Record screen ({hotkey_label(self.hotkey())})"
+        if self.recording:
+            return "Stop screen recording"
+        suffix = " (last-2-min active)" if self.buffer_active else ""
+        return f"Record screen ({hotkey_label(self.hotkey())}){suffix}"
 
     def toggle(self):
         with self.lock:
@@ -2076,7 +2108,9 @@ class ScreenService:
         return {"available": True, "recording": self.recording,
                 "seconds": int(time.monotonic() - self.started) if self.started and self.recording else 0,
                 "waiting": len(self.box.waiting()), "uploading": self.uploading,
-                "hotkey": hotkey_label(self.hotkey()), "last_link": self.last_link}
+                "hotkey": hotkey_label(self.hotkey()), "last_link": self.last_link,
+                "buffer_enabled": bool(self.cfg.get("screen_replay_buffer")),
+                "buffer_running": self.buffer_active}
 
     # -- upload
     def _upload_loop(self):
