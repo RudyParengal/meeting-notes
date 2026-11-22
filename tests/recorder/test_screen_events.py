@@ -453,8 +453,28 @@ def t_trim_events_keeps_range_and_carries_window():
 
 check("Watcher flushes typing on pause, skips clicks while paused, and resets held buttons on resume",
       t_watcher_paused_skips_clicks_and_resets_buttons)
+def t_watcher_ignores_clicks_on_our_draw_window():
+    p = tmp() / "draw.events.jsonl"
+    probe = FakeProbe(fg=(101, "notepad.exe", "notes.txt"), cur=(200, 200),
+                      btns=(False, False), li=10, at=(999, "notewell.exe", ""))
+    w = se.Watcher(p, (0, 0, 800, 600), lambda: 500, (800, 600), _is_priv, probe=probe, own_pid=999)
+    w.step(0, windows=True)
+    # Mouse down/drag/up over our own draw catcher window (pid == own_pid -> ours=True)
+    probe.btns = (True, False)
+    w.step(100, windows=False)
+    probe.cur = (350, 350)
+    w.step(200, windows=False)
+    probe.btns = (False, False)
+    w.step(300, windows=False)
+    w.stop()
+    rows = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines()]
+    assert not any(r.get("k") == "click" for r in rows), rows
+
+
 check("trim_events keeps [start, end], carries last window/private to t=0, and recounts lines",
       t_trim_events_keeps_range_and_carries_window)
+check("Watcher ignores clicks on our own windows (draw catcher, ours=True)",
+      t_watcher_ignores_clicks_on_our_draw_window)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)

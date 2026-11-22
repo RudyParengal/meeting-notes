@@ -868,7 +868,39 @@ check("pick_windows excludes our own pid and private windows", t_pick_windows_ex
 check("parse_trim handles empty, valid ranges, clipping, and rejects bad ranges", t_parse_trim_table)
 check("trim_video cuts a 4 s test recording to 1..3 s and plays", t_trim_video_4s_cut_1_to_3)
 check("a failed trim moves the job to stuck/ and uploads nothing", t_failed_trim_moves_to_stuck_and_never_uploads)
+def t_draw_stroke_fades_after_3s():
+    class FakeCanvas:
+        def __init__(self):
+            self.items = {}
+            self.next_id = 1
+
+        def create_line(self, *coords, **opts):
+            iid = self.next_id
+            self.next_id += 1
+            self.items[iid] = (coords, opts)
+            return iid
+
+        def delete(self, iid):
+            self.items.pop(iid, None)
+
+    timers = []
+    cv = FakeCanvas()
+    board = sr._StrokeBoard(cv, lambda ms, fn: timers.append((ms, fn)), fade_ms=3000)
+    board.on_down(10, 10)
+    board.on_move(30, 40)
+    board.on_move(60, 80)
+    assert len(cv.items) == 2 and not timers
+    for _, opts in cv.items.values():
+        assert opts["fill"] == "#EF4444" and opts["width"] == 4 and opts["capstyle"] == "round", opts
+    board.on_up()
+    assert len(timers) == 1 and timers[0][0] == 3000, timers
+    assert len(cv.items) == 2
+    timers[0][1]()  # 3 s elapsed
+    assert len(cv.items) == 0, cv.items
+
+
 check("discard keeps files in discarded/ and mark_sent moves .untrimmed.mp4", t_discard_and_untrimmed_move_aside)
+check("drawing strokes use red round lines and fade after 3 s", t_draw_stroke_fades_after_3s)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)

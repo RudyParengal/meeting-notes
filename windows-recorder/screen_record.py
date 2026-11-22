@@ -817,6 +817,114 @@ def _pick_window_dialog(root, area, tk):
     return res["rect"]
 
 
+class _StrokeBoard:
+    """Tracks freehand strokes on a canvas and deletes each one after fade_ms."""
+
+    def __init__(self, canvas, after_fn, fade_ms=3000):
+        self.canvas = canvas
+        self.after_fn = after_fn
+        self.fade_ms = fade_ms
+        self._current = []
+        self._last = None
+
+    def on_down(self, x, y):
+        self._current = []
+        self._last = (x, y)
+
+    def on_move(self, x, y):
+        if self._last is None:
+            return
+        lx, ly = self._last
+        item = self.canvas.create_line(lx, ly, x, y, fill="#EF4444", width=4,
+                                       capstyle="round", joinstyle="round")
+        self._current.append(item)
+        self._last = (x, y)
+
+    def on_up(self, x=None, y=None):
+        if self._last is not None and not self._current:
+            lx, ly = self._last
+            item = self.canvas.create_line(lx, ly, lx + 1, ly, fill="#EF4444", width=4,
+                                           capstyle="round", joinstyle="round")
+            self._current.append(item)
+        items = list(self._current)
+        self._current.clear()
+        self._last = None
+        if items:
+            def erase():
+                for item in items:
+                    try:
+                        self.canvas.delete(item)
+                    except Exception:
+                        pass
+            self.after_fn(self.fade_ms, erase)
+
+
+class DrawOverlay:
+    """Lazy two-window drawing overlay: hidden mouse catcher + recorded click-through ink."""
+
+    _KEY = "#010203"
+
+    def __init__(self, root, tk, area, on_change=None):
+        self.root, self.tk, self.area, self.on_change = root, tk, area, on_change
+        self.on = False
+        self._built = False
+        self.catcher = self.ink = self.board = None
+
+    def _build(self):
+        ax, ay, aw, ah = self.area
+        tk = self.tk
+        ink = tk.Toplevel(self.root)
+        ink.overrideredirect(True)
+        ink.attributes("-topmost", True)
+        ink.configure(bg=self._KEY)
+        ink.attributes("-transparentcolor", self._KEY)
+        ink.geometry(f"{aw}x{ah}+{ax}+{ay}")
+        canvas = tk.Canvas(ink, bg=self._KEY, highlightthickness=0, width=aw, height=ah)
+        canvas.pack(fill="both", expand=True)
+        _click_through(_hwnd(ink))
+
+        catcher = tk.Toplevel(self.root)
+        catcher.overrideredirect(True)
+        catcher.attributes("-topmost", True)
+        catcher.attributes("-alpha", 0.004)
+        catcher.configure(bg="#000000", cursor="pencil")
+        catcher.geometry(f"{aw}x{ah}+{ax}+{ay}")
+        hide_from_capture(_hwnd(catcher))
+
+        board = _StrokeBoard(canvas, self.root.after, fade_ms=3000)
+        catcher.bind("<ButtonPress-1>", lambda e: board.on_down(e.x, e.y))
+        catcher.bind("<B1-Motion>", lambda e: board.on_move(e.x, e.y))
+        catcher.bind("<ButtonRelease-1>", lambda e: board.on_up(e.x, e.y))
+        catcher.bind("<Escape>", lambda e: self.set_on(False))
+
+        self.ink, self.catcher, self.board, self._built = ink, catcher, board, True
+
+    def set_on(self, on: bool):
+        want = bool(on)
+        if want:
+            if not self._built:
+                self._build()
+            self.catcher.deiconify()
+            self.catcher.focus_force()
+            self.on = True
+        else:
+            if self._built and self.catcher is not None:
+                self.catcher.withdraw()
+            self.on = False
+        if self.on_change is not None:
+            self.on_change(self.on)
+
+    def destroy(self):
+        for w in (self.catcher, self.ink):
+            if w is not None:
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
+        self.catcher = self.ink = self.board = None
+        self.on = self._built = False
+
+
 def _show_region_frame(root, tk, area):
     """Thin 2 px red frame placed 2 px outside area, click-through and hidden from capture."""
     x, y, w, h = area
@@ -1387,6 +1495,23 @@ def child_main(outbox_dir: str) -> int:
                             relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
                             font=("Segoe UI", 10), padx=6)
         mic_btn.pack(side="left", padx=(6, 0), pady=6)
+    draw_btn = None
+
+    def on_draw_change(is_on):
+        if draw_btn is not None:
+            draw_btn.config(text="Drawing" if is_on else "Draw",
+                            bg="#4F46E5" if is_on else "#2D2A36")
+        try:
+            badge.lift()
+        except tk.TclError:
+            pass
+
+    draw = DrawOverlay(root, tk, area, on_change=on_draw_change)
+    draw_btn = tk.Button(badge, text="Draw", width=7, command=lambda: draw.set_on(not draw.on),
+                         relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
+                         font=("Segoe UI", 10), padx=6)
+    draw_btn.pack(side="left", padx=(6, 0), pady=6)
+    badge.bind("<Escape>", lambda e: draw.set_on(False))
     tk.Button(badge, text="Stop", command=stop_asked.set, relief="flat", bg="#EF4444", fg="#ECEAF3",
               activebackground="#DC2626", font=("Segoe UI", 10, "bold"), padx=10).pack(side="left", padx=10, pady=6)
     badge.update_idletasks()
@@ -1405,6 +1530,10 @@ def child_main(outbox_dir: str) -> int:
             set_muted(True)
         elif cmd == "unmute":
             set_muted(False)
+        elif cmd == "draw on":
+            draw.set_on(True)
+        elif cmd == "draw off":
+            draw.set_on(False)
 
     def schedule_cmd(cmd):
         try:
@@ -1430,6 +1559,7 @@ def child_main(outbox_dir: str) -> int:
     root.after(0, tick)
     root.mainloop()
     stopped_at = time.time()
+    draw.destroy()
     badge.destroy()
     for edge in region_frame:
         try:
