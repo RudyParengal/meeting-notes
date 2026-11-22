@@ -58,9 +58,17 @@ function resetRateLimit() {
   reqDropNotified = false;
 }
 
+// Chrome stops an idle extension worker after about 30 s and forgets everything in memory.
+// The connection is kept in session storage (memory only, cleared when Chrome closes) so a
+// woken worker carries on at once, and an alarm wakes the worker to look for a new recording.
+function saveBridge() {
+  chrome.storage.session.set({ bridge: bridge });
+}
+
 function disconnectBridge() {
   // Rule B6: no recording, nothing kept.
   bridge = null;
+  chrome.storage.session.remove("bridge");
   queue = [];
   inFlight.clear();
   lastPageKey = "";
@@ -148,9 +156,14 @@ async function probeBridge() {
         disconnectBridge();
       } else if (aliveSecret !== bridge.secret) {
         // A new recording started on the same port.
+        var samePort = bridge.port;
         disconnectBridge();
-        bridge = { port: bridge.port, secret: aliveSecret };
+        bridge = { port: samePort, secret: aliveSecret };
+        saveBridge();
         refreshActiveTab(true);
+      } else {
+        // Any extension call keeps the worker awake while a recording runs.
+        chrome.runtime.getPlatformInfo(function () {});
       }
       return;
     }
@@ -159,6 +172,7 @@ async function probeBridge() {
       var secret = await askHello(port);
       if (secret) {
         bridge = { port: port, secret: secret };
+        saveBridge();
         lastPageKey = "";
         resetRateLimit();
         refreshActiveTab(true);
@@ -327,8 +341,18 @@ chrome.storage.onChanged.addListener(function (_changes, area) {
   if (area === "local") loadOptions();
 });
 
+chrome.alarms.create("notewell-probe", { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener(function () { probeBridge(); });
+
 loadOptions();
 refreshActiveTab(false);
-probeBridge();
+chrome.storage.session.get("bridge", function (items) {
+  var saved = !chrome.runtime.lastError && items && items.bridge;
+  if (!bridge && saved && typeof saved.secret === "string" && BRIDGE_PORTS.indexOf(saved.port) !== -1) {
+    bridge = { port: saved.port, secret: saved.secret };
+    refreshActiveTab(false);
+  }
+  probeBridge();
+});
 setInterval(probeBridge, HELLO_INTERVAL_MS);
 setInterval(flushQueue, FLUSH_INTERVAL_MS);

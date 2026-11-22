@@ -9,7 +9,8 @@
     "tabs",
     "webRequest",
     "scripting",
-    "storage"
+    "storage",
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>",

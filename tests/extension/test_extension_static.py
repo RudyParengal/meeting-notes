@@ -137,7 +137,7 @@ def t_manifest():
     assert m["manifest_version"] == 3, m.get("manifest_version")
     assert m["name"] == "Notewell recorder helper", m.get("name")
     assert m["incognito"] == "not_allowed", m.get("incognito")
-    assert set(m["permissions"]) == {"tabs", "webRequest", "scripting", "storage"}, m["permissions"]
+    assert set(m["permissions"]) == {"tabs", "webRequest", "scripting", "storage", "alarms"}, m["permissions"]
     assert "<all_urls>" in m["host_permissions"], m["host_permissions"]
     assert "http://127.0.0.1/*" in m["host_permissions"], m["host_permissions"]
     assert m["background"]["service_worker"] == "background.js"
