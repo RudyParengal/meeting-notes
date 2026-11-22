@@ -34,6 +34,8 @@ hiddenimports = [
     # dictation (windows-recorder/dictation.py, dictation_store.py): nothing else uses sqlite3
     "sqlite3", "uuid", "queue", "ctypes.wintypes", "urllib.request", "urllib.parse",
     "logging.handlers",                           # windows-recorder/logfiles.py: logs roll at 5 MB
+    # screen recording (screen_bridge.py: local link for the Chrome helper; screen_trim.py, screen_events.py)
+    "http.server", "socketserver", "fractions", "secrets", "struct",
 ]
 for pkg in ("uvicorn", "faster_whisper", "ctranslate2", "av", "sherpa_onnx",
             "soundcard", "pystray", "tokenizers", "onnxruntime"):
