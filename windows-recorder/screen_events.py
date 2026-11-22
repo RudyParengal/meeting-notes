@@ -275,17 +275,17 @@ def _os_label():
 class Watcher:
     """Polls WinProbe in a daemon thread and writes <cid>.events.jsonl. Never raises from stop()."""
 
-    def __init__(self, path, area, clock, video_size, is_private, probe=None, own_pid=None):
+    def __init__(self, path, area, clock, video_size, is_private, probe=None, own_pid=None, paused=None):
         self.path = Path(path)
         self.area = tuple(int(v) for v in area)
         self.clock = clock
         self.video_size = [int(video_size[0]), int(video_size[1])]
-        self.is_private, self.probe = is_private, probe
+        self.is_private, self.probe, self.paused = is_private, probe, paused
         self.own_pid = os.getpid() if own_pid is None else own_pid
         self._windows, self._clicks, self._typing = Windows(), Clicks(), Typing()
         self._writer = self._thread = self._last_input = self._last_cursor = None
         self._stop = threading.Event()
-        self._stopped = self._front_private = self._prev_any_btn = False
+        self._stopped = self._front_private = self._prev_any_btn = self._was_paused = False
         self._last_now = 0
 
     def _header(self):
@@ -310,6 +310,20 @@ class Watcher:
             return
         self._ensure_open()
         now_i = max(0, int(now))
+        if self.paused is not None and self.paused():
+            if not self._was_paused:
+                tev = self._typing.flush(now_i)
+                if tev is not None:
+                    self._writer.line(tev)
+                self._was_paused = True
+            return
+        if self._was_paused:
+            self._was_paused = False
+            left, right = self.probe.buttons()
+            self._clicks.prev_left, self._clicks.prev_right = bool(left), bool(right)
+            self._last_input = self.probe.last_input()
+            self._last_cursor = self.probe.cursor()
+            self._prev_any_btn = bool(left) or bool(right)
         self._last_now = now_i
 
         if windows:
@@ -386,3 +400,46 @@ class Watcher:
             self._writer.end(now)
         except Exception:
             log.exception("screen events stop failed")
+
+
+def trim_events(src, dst, start_ms, end_ms):
+    """Trim an events JSONL file to [start_ms, end_ms], shifting timestamps to start at 0."""
+    start_i, end_i = int(start_ms), int(end_ms)
+    if start_i < 0 or end_i < start_i:
+        raise ValueError("invalid trim range")
+    raw_lines = [ln for ln in Path(src).read_text(encoding="utf-8").splitlines() if ln.strip()]
+    if not raw_lines:
+        raise ValueError("empty events file")
+    rows = [json.loads(ln) for ln in raw_lines]
+    header = rows[0]
+    events, orig_cut = [], False
+    for idx, row in enumerate(rows[1:]):
+        if row.get("k") == "end":
+            orig_cut = bool(row.get("cut", False))
+        elif "t" in row:
+            events.append((int(row["t"]), idx, row))
+    events.sort(key=lambda item: (item[0], item[1]))
+    carry = None
+    kept = []
+    for t, _, row in events:
+        if t < start_i:
+            if row.get("k") in ("window", "private"):
+                carry = row
+        elif t <= end_i:
+            shifted = dict(row)
+            shifted["t"] = t - start_i
+            if shifted.get("k") == "typing" and "ms" in shifted:
+                shifted["ms"] = max(0, min(int(shifted["ms"]), end_i - t))
+            kept.append(shifted)
+    out = [header]
+    if carry is not None:
+        carried = dict(carry)
+        carried["t"] = 0
+        out.append(carried)
+    out.extend(kept)
+    out.append({"t": end_i - start_i, "k": "end", "lines": len(out), "cut": orig_cut})
+    dst_p = Path(dst)
+    tmp_p = dst_p.with_suffix(".jsonl.new")
+    text = "".join(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n" for obj in out)
+    tmp_p.write_text(text, encoding="utf-8", newline="\n")
+    os.replace(tmp_p, dst_p)

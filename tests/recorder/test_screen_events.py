@@ -367,7 +367,114 @@ def t_capture_video_ms():
     assert 1150 <= ms <= 1600, ms
 
 
+def t_watcher_paused_skips_clicks_and_resets_buttons():
+    p = tmp() / "paused.events.jsonl"
+    state = {"paused": False, "t": 0}
+    probe = FakeProbe(fg=(101, "notepad.exe", "notes.txt"), cur=(200, 200), btns=(False, False), li=10)
+    w = se.Watcher(p, (0, 0, 800, 600), lambda: state["t"], (800, 600), _is_priv,
+                   probe=probe, own_pid=999, paused=lambda: state["paused"])
+    w.step(0, windows=True)
+    # Start typing burst before pause
+    probe.li = 11
+    w.step(100, windows=False)
+    probe.li = 12
+    w.step(300, windows=False)
+    # Pause: typing flushes once; clicks during pause are ignored
+    state["paused"] = True
+    state["t"] = 350
+    w.step(350, windows=False)
+    probe.btns = (True, False)
+    w.step(350, windows=False)
+    probe.btns = (False, False)
+    w.step(350, windows=False)
+    # Hold button across resume: must not create a click on resume
+    probe.btns = (True, False)
+    state["paused"] = False
+    w.step(400, windows=False)
+    probe.btns = (False, False)
+    w.step(450, windows=False)
+    # Real click after resume is recorded
+    probe.btns = (True, False)
+    w.step(500, windows=False)
+    state["t"] = 600
+    w.stop()
+    rows = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines()]
+    clicks = [r for r in rows if r.get("k") == "click"]
+    typings = [r for r in rows if r.get("k") == "typing"]
+    assert clicks == [{"t": 500, "k": "click", "b": "left", "x": 200, "y": 200}], clicks
+    assert typings == [{"t": 100, "k": "typing", "ms": 200}], typings
+
+
 check("Capture.video_ms returns milliseconds since t0", t_capture_video_ms)
+def t_trim_events_keeps_range_and_carries_window():
+    src = tmp() / "in.events.jsonl"
+    dst = tmp() / "out.events.jsonl"
+    lines = [
+        {"v": 1, "started_utc": "2026-11-23T14:05:09Z", "os": "Windows 10.0.26300",
+         "app": "2.7.4", "screen": {"x": 0, "y": 0, "w": 1920, "h": 1080}, "video": [1920, 1080]},
+        {"t": 40, "k": "window", "app": "notepad.exe", "title": "First"},
+        {"t": 500, "k": "window", "app": "chrome.exe", "title": "Second"},
+        {"t": 800, "k": "click", "b": "left", "x": 10, "y": 20},
+        {"t": 1200, "k": "click", "b": "left", "x": 30, "y": 40},
+        {"t": 2500, "k": "typing", "ms": 300},
+        {"t": 3500, "k": "click", "b": "right", "x": 50, "y": 60},
+        {"t": 4000, "k": "end", "lines": 7, "cut": False},
+    ]
+    src.write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in lines), encoding="utf-8")
+    se.trim_events(src, dst, 1000, 3000)
+    got = [json.loads(ln) for ln in dst.read_text(encoding="utf-8").splitlines()]
+    assert got[0] == lines[0], got[0]
+    assert got[1:] == [
+        {"t": 0, "k": "window", "app": "chrome.exe", "title": "Second"},
+        {"t": 200, "k": "click", "b": "left", "x": 30, "y": 40},
+        {"t": 1500, "k": "typing", "ms": 300},
+        {"t": 2000, "k": "end", "lines": 4, "cut": False},
+    ], got[1:]
+
+    # Also test carrying a private line from before start
+    src2 = tmp() / "in2.events.jsonl"
+    dst2 = tmp() / "out2.events.jsonl"
+    lines2 = [
+        lines[0],
+        {"t": 100, "k": "window", "app": "notepad.exe", "title": "First"},
+        {"t": 600, "k": "private"},
+        {"t": 1500, "k": "window", "app": "notepad.exe", "title": "Back"},
+        {"t": 3000, "k": "end", "lines": 4, "cut": True},
+    ]
+    src2.write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in lines2), encoding="utf-8")
+    se.trim_events(src2, dst2, 1000, 2500)
+    got2 = [json.loads(ln) for ln in dst2.read_text(encoding="utf-8").splitlines()]
+    assert got2[1:] == [
+        {"t": 0, "k": "private"},
+        {"t": 500, "k": "window", "app": "notepad.exe", "title": "Back"},
+        {"t": 1500, "k": "end", "lines": 3, "cut": True},
+    ], got2[1:]
+
+
+check("Watcher flushes typing on pause, skips clicks while paused, and resets held buttons on resume",
+      t_watcher_paused_skips_clicks_and_resets_buttons)
+def t_watcher_ignores_clicks_on_our_draw_window():
+    p = tmp() / "draw.events.jsonl"
+    probe = FakeProbe(fg=(101, "notepad.exe", "notes.txt"), cur=(200, 200),
+                      btns=(False, False), li=10, at=(999, "notewell.exe", ""))
+    w = se.Watcher(p, (0, 0, 800, 600), lambda: 500, (800, 600), _is_priv, probe=probe, own_pid=999)
+    w.step(0, windows=True)
+    # Mouse down/drag/up over our own draw catcher window (pid == own_pid -> ours=True)
+    probe.btns = (True, False)
+    w.step(100, windows=False)
+    probe.cur = (350, 350)
+    w.step(200, windows=False)
+    probe.btns = (False, False)
+    w.step(300, windows=False)
+    w.stop()
+    rows = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines()]
+    assert not any(r.get("k") == "click" for r in rows), rows
+
+
+check("trim_events keeps [start, end], carries last window/private to t=0, and recounts lines",
+      t_trim_events_keeps_range_and_carries_window)
+check("Watcher ignores clicks on our own windows (draw catcher, ours=True)",
+      t_watcher_ignores_clicks_on_our_draw_window)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)

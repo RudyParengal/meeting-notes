@@ -608,9 +608,463 @@ def t_crash_keeps_what_was_recorded():
     assert all(r.get("k") != "end" for r in rows), rows
 
 
+def _record_script(steps, env_extra=None):
+    """Run the child with test source; wait for 'started', then run [(delay_s, cmd), ...]."""
+    home = tmp()
+    outdir = home / "screen" / "outbox"
+    outdir.mkdir(parents=True)
+    env = {**os.environ, "NOTEWELL_SCREEN_TEST_SOURCE": "testsrc=size=1280x720:rate=15,realtime"}
+    if env_extra:
+        env.update(env_extra)
+    p = subprocess.Popen([sys.executable, "-c", CHILD, str(outdir), MODDIR, str(ROOT / "windows-recorder")],
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         env=env, text=True, encoding="utf-8")
+    events = []
+    first = p.stdout.readline()
+    if first.strip():
+        events.append(json.loads(first))
+    for delay, cmd in steps:
+        if delay:
+            time.sleep(delay)
+        if cmd is not None:
+            p.stdin.write(cmd + "\n")
+            p.stdin.flush()
+    try:
+        out, _ = p.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        raise AssertionError("the recording copy did not finish within 30 s")
+    for line in out.splitlines():
+        if line.strip():
+            events.append(json.loads(line))
+    return home, events
+
+
+def _pts_and_duration(path):
+    import av
+    v_pts, a_pts = [], []
+    with av.open(str(path)) as c:
+        vs = c.streams.video[0]
+        as_ = c.streams.audio[0] if c.streams.audio else None
+        for pkt in c.demux():
+            if pkt.dts is None and pkt.pts is None:
+                continue
+            if pkt.stream.type == "video":
+                for f in pkt.decode():
+                    if f.pts is not None:
+                        v_pts.append(f.pts)
+            elif pkt.stream.type == "audio":
+                for f in pkt.decode():
+                    if f.pts is not None:
+                        a_pts.append(f.pts)
+        v_dur = (v_pts[-1] - v_pts[0]) * float(vs.time_base) if len(v_pts) >= 2 else 0.0
+    return v_pts, a_pts, v_dur
+
+
+def t_video_ms_freezes_on_pause():
+    cap = sr.Capture(tmp() / "v.mp4", 0)
+    cap.t0 = time.monotonic() - 1.0
+    cap.pause()
+    assert cap.paused
+    a = cap.video_ms()
+    time.sleep(0.2)
+    b = cap.video_ms()
+    assert a == b, (a, b)
+    cap.resume()
+    assert not cap.paused
+    c = cap.video_ms()
+    assert abs(c - a) < 100, (a, c)
+    time.sleep(0.2)
+    d = cap.video_ms()
+    assert d - c >= 120, (c, d)
+
+
+def t_record_with_pause():
+    home, events = _record_script([(1.5, "pause"), (2.0, "resume"), (1.5, "stop")])
+    done = [e for e in events if e.get("event") == "done"]
+    assert done and not done[0]["error"], events
+    box = sr.Outbox(home / "screen")
+    jobs = box.waiting()
+    assert len(jobs) == 1, jobs
+    v_pts, a_pts, v_dur = _pts_and_duration(box.video(jobs[0]["client_id"]))
+    assert 2.5 <= v_dur <= 3.6, f"duration {v_dur:.2f} s"
+    assert len(v_pts) >= 30 and all(v_pts[i] < v_pts[i + 1] for i in range(len(v_pts) - 1)), v_pts[:10]
+    assert len(a_pts) >= 30 and all(a_pts[i] < a_pts[i + 1] for i in range(len(a_pts) - 1)), a_pts[:10]
+
+
+def t_stop_while_paused():
+    home, events = _record_script([(2.0, "pause"), (1.0, "stop")])
+    done = [e for e in events if e.get("event") == "done"]
+    assert done and not done[0]["error"], events
+    box = sr.Outbox(home / "screen")
+    jobs = box.waiting()
+    assert len(jobs) == 1, jobs
+    kinds, n = _frames(box.video(jobs[0]["client_id"]))
+    assert kinds == ["audio", "video"] and n >= 10, (kinds, n)
+
+
 check("5 s of recording: picture and sound, 15 frames a second, 3 files", t_records_picture_and_sound)
 check("killed mid-recording: what was recorded still plays", t_crash_keeps_what_was_recorded)
 check("start_events and stop_events never raise when something breaks", t_start_and_stop_events_never_raise)
+check("Capture.video_ms freezes during pause and resumes from the same value", t_video_ms_freezes_on_pause)
+check("recording with a 2 s pause leaves the pause out and keeps pts rising", t_record_with_pause)
+def t_mute_silences_middle_second():
+    import av
+    import numpy as np
+    home, events = _record_script([(1.0, "mute"), (1.0, "unmute"), (1.0, "stop")])
+    done = [e for e in events if e.get("event") == "done"]
+    assert done and not done[0]["error"], events
+    box = sr.Outbox(home / "screen")
+    jobs = box.waiting()
+    assert len(jobs) == 1, jobs
+    # Job file gains no mute fields
+    assert not any("mute" in k.lower() for k in jobs[0].keys()), jobs[0]
+    segs = [[], [], []]  # [0.0..0.8], [1.2..1.8], [2.2..end]
+    with av.open(str(box.video(jobs[0]["client_id"]))) as c:
+        as_ = c.streams.audio[0]
+        tb = float(as_.time_base)
+        for frame in c.decode(audio=0):
+            t = frame.pts * tb if frame.pts is not None else 0.0
+            arr = frame.to_ndarray().astype(np.float32).ravel()
+            if 0.0 <= t <= 0.8:
+                segs[0].append(arr)
+            elif 1.2 <= t <= 1.8:
+                segs[1].append(arr)
+            elif t >= 2.2:
+                segs[2].append(arr)
+    rms = [float(np.sqrt(np.mean(np.concatenate(s) ** 2))) for s in segs]
+    assert rms[0] > 0.01, f"first second rms {rms}"
+    assert rms[1] < 0.001, f"middle muted rms {rms}"
+    assert rms[2] > 0.01, f"last second rms {rms}"
+
+
+check("stopping while paused still finishes and produces a playable file", t_stop_while_paused)
+def t_capture_source_whole_monitor():
+    s = sr.capture_source(0, (0, 0, 1920, 1080))
+    assert "video_size" not in s and "ddagrab=output_idx=0:framerate=15:draw_mouse=1" in s, s
+
+
+def t_capture_source_region_exact():
+    s = sr.capture_source(1, (1920, 0, 1920, 1080), (2020, 100, 801, 601))
+    expected = "ddagrab=output_idx=1:framerate=15:draw_mouse=1:video_size=800x600:offset_x=100:offset_y=100,hwdownload,format=bgra"
+    assert s == expected, s
+
+
+def t_capture_source_clipped_and_outside():
+    s = sr.capture_source(0, (0, 0, 1920, 1080), (-50, 900, 400, 300))
+    assert "video_size=350x180:offset_x=0:offset_y=900" in s, s
+    try:
+        sr.capture_source(0, (0, 0, 1920, 1080), (2000, 0, 300, 300))
+        raise AssertionError("expected ValueError for region outside monitor")
+    except ValueError:
+        pass
+
+
+def t_header_with_test_area():
+    home, events = _record_script([(1.0, "stop")], env_extra={"NOTEWELL_SCREEN_TEST_AREA": "120,80,640,480"})
+    done = [e for e in events if e.get("event") == "done"]
+    assert done and not done[0]["error"], events
+    box = sr.Outbox(home / "screen")
+    cid = box.waiting()[0]["client_id"]
+    hdr = json.loads(box.events(cid).read_text(encoding="utf-8").splitlines()[0])
+    assert hdr["screen"] == {"x": 120, "y": 80, "w": 640, "h": 480}, hdr
+
+
+def t_pick_windows_excludes_own_pid_and_private():
+    def fake_walk():
+        return [
+            (1, 999, "notewell.exe", "Notewell Badge", (0, 0, 200, 100)),
+            (2, 101, "notepad.exe", "notes.txt - Notepad", (10, 20, 800, 600)),
+            (3, 202, "keepass.exe", "My Vault - KeePass", (50, 50, 700, 500)),
+            (4, 303, "chrome.exe", "Barclays Online Banking", (50, 50, 700, 500)),
+            (5, 404, "code.exe", "   ", (0, 0, 800, 600)),
+        ]
+    got = sr.pick_windows(walk=fake_walk, own_pid=999, blocked_apps={"keepass.exe"})
+    assert got == [(2, "notepad.exe", "notes.txt - Notepad", (10, 20, 800, 600))], got
+
+
+check("muting silences the middle second while keeping audio in step", t_mute_silences_middle_second)
+check("capture_source whole monitor omits video_size", t_capture_source_whole_monitor)
+check("capture_source region builds exact ddagrab offsets and even size", t_capture_source_region_exact)
+check("capture_source clips partial regions and rejects outside ones", t_capture_source_clipped_and_outside)
+check("NOTEWELL_SCREEN_TEST_AREA sets the events header screen", t_header_with_test_area)
+def t_parse_trim_table():
+    import screen_trim as st
+    assert st.parse_trim("", "", 30.0) is None
+    assert st.parse_trim("   ", "", 30.0) is None
+    assert st.parse_trim("0:05", "0:20", 30.0) == (5.0, 20.0)
+    assert st.parse_trim("", "0:15", 30.0) == (0.0, 15.0)
+    assert st.parse_trim("0:10", "", 30.0) == (10.0, 30.0)
+    assert st.parse_trim("0:05", "1:00", 30.0) == (5.0, 30.0)   # clipped past the end
+    assert sr.parse_trim("0:02", "0:07", 10.0) == (2.0, 7.0)
+    for bad_s, bad_e in (("0:20", "0:05"), ("0:10", "0:10"), ("0:10", "0:10.5"), ("bad", "0:20"), ("0:75", "1:00")):
+        try:
+            st.parse_trim(bad_s, bad_e, 30.0)
+            raise AssertionError(f"accepted {(bad_s, bad_e)}")
+        except ValueError:
+            pass
+
+
+def t_trim_video_4s_cut_1_to_3():
+    import screen_trim as st
+    home, events = _record_script([(4.0, "stop")])
+    done = [e for e in events if e.get("event") == "done"]
+    assert done and not done[0]["error"], events
+    box = sr.Outbox(home / "screen")
+    job = box.waiting()[0]
+    src = box.video(job["client_id"])
+    dst = tmp() / "trimmed.mp4"
+    st.trim_video(src, dst, 1.0, 3.0, job["encoder"])
+    v_pts, a_pts, v_dur = _pts_and_duration(dst)
+    assert 1.8 <= v_dur <= 2.3, f"trimmed duration {v_dur:.2f} s"
+    assert len(v_pts) >= 20 and all(v_pts[i] < v_pts[i + 1] for i in range(len(v_pts) - 1)), v_pts[:10]
+    assert len(a_pts) >= 20 and all(a_pts[i] < a_pts[i + 1] for i in range(len(a_pts) - 1)), a_pts[:10]
+
+
+def t_failed_trim_moves_to_stuck_and_never_uploads():
+    srv = FakeServer()
+    home = tmp()
+    svc = sr.ScreenService(home, ["unused"], get_link=lambda: _Link(srv), notify=lambda t, m: None)
+    job = svc.box.new_job("Trim fail clip")
+    cid = job["client_id"]
+    svc.box.video(cid).write_bytes(_video_file().read_bytes())
+    svc.box.events(cid).write_bytes(_events_file().read_bytes())
+
+    def boom(*a, **kw):
+        raise RuntimeError("encoder error")
+
+    status, msg = sr.finalize_job(svc.box, job, 10.0, time.time(),
+                                  {"mic": True, "encoder": "libx264", "error": None},
+                                  action="send", title="Renamed", trim_range=(1.0, 5.0),
+                                  trim_video_fn=boom)
+    assert status == "trim_failed" and "Renamed" in msg, (status, msg)
+    assert (svc.box.dir / "stuck" / f"{cid}.mp4").exists()
+    assert (svc.box.dir / "stuck" / f"{cid}.json").exists()
+    assert svc.box.waiting() == []
+    svc.upload_waiting()
+    assert srv.puts == 0 and srv.data == b""
+
+
+def t_discard_and_untrimmed_move_aside():
+    box = sr.Outbox(tmp())
+    j1 = box.new_job("Drop me")
+    cid1 = j1["client_id"]
+    box.video(cid1).write_bytes(b"v1")
+    status, _ = sr.finalize_job(box, j1, 3.0, time.time(),
+                                {"mic": True, "encoder": "libx264", "error": None}, action="discard")
+    assert status == "discarded"
+    assert (box.dir / "discarded" / f"{cid1}.mp4").exists()
+    assert box.waiting() == []
+
+    j2 = box.new_job("Keep untrimmed")
+    cid2 = j2["client_id"]
+    box.video(cid2).write_bytes(b"v2")
+    box.untrimmed(cid2).write_bytes(b"orig")
+    box.mark_sent(j2, "https://example.test/v/ok")
+    assert (box.sent / f"{cid2}.untrimmed.mp4").exists()
+
+
+check("pick_windows excludes our own pid and private windows", t_pick_windows_excludes_own_pid_and_private)
+check("parse_trim handles empty, valid ranges, clipping, and rejects bad ranges", t_parse_trim_table)
+check("trim_video cuts a 4 s test recording to 1..3 s and plays", t_trim_video_4s_cut_1_to_3)
+check("a failed trim moves the job to stuck/ and uploads nothing", t_failed_trim_moves_to_stuck_and_never_uploads)
+def t_draw_stroke_fades_after_3s():
+    class FakeCanvas:
+        def __init__(self):
+            self.items = {}
+            self.next_id = 1
+
+        def create_line(self, *coords, **opts):
+            iid = self.next_id
+            self.next_id += 1
+            self.items[iid] = (coords, opts)
+            return iid
+
+        def delete(self, iid):
+            self.items.pop(iid, None)
+
+    timers = []
+    cv = FakeCanvas()
+    board = sr._StrokeBoard(cv, lambda ms, fn: timers.append((ms, fn)), fade_ms=3000)
+    board.on_down(10, 10)
+    board.on_move(30, 40)
+    board.on_move(60, 80)
+    assert len(cv.items) == 2 and not timers
+    for _, opts in cv.items.values():
+        assert opts["fill"] == "#EF4444" and opts["width"] == 4 and opts["capstyle"] == "round", opts
+    board.on_up()
+    assert len(timers) == 1 and timers[0][0] == 3000, timers
+    assert len(cv.items) == 2
+    timers[0][1]()  # 3 s elapsed
+    assert len(cv.items) == 0, cv.items
+
+
+check("discard keeps files in discarded/ and mark_sent moves .untrimmed.mp4", t_discard_and_untrimmed_move_aside)
+def t_mask_frame_pixelates_and_leaves_rest():
+    import numpy as np
+    arr = np.zeros((64, 64, 4), dtype=np.uint8)
+    arr[:, ::2] = [20, 40, 200, 255]
+    arr[:, 1::2] = [220, 200, 40, 255]
+    orig = arr.copy()
+    out = sr.mask_frame(arr, [(0, 0, 32, 32)], block=16)
+    assert out is arr
+    for by in (0, 16):
+        for bx in (0, 16):
+            blk = arr[by:by + 16, bx:bx + 16]
+            assert np.all(blk == blk[0, 0]), f"block ({bx},{by}) not flat"
+    # Outside the masked rect is untouched
+    assert np.array_equal(arr[:, 32:], orig[:, 32:])
+    assert np.array_equal(arr[32:, :32], orig[32:, :32])
+
+
+def t_record_with_mask_hides_top_left():
+    import av
+    import numpy as np
+    # Use a fine checkerboard/noise-like pattern via testsrc2 or testsrc; testsrc has sharp detail
+    # and we verify the top-left 64x64 has low colour variation per 16x16 block in the last frame.
+    home, events = _record_script([(0.0, "mask 0,0,64,64"), (1.5, "stop")])
+    done = [e for e in events if e.get("event") == "done"]
+    assert done and not done[0]["error"], events
+    box = sr.Outbox(home / "screen")
+    vid = box.video(box.waiting()[0]["client_id"])
+    last_rgb = None
+    with av.open(str(vid)) as c:
+        for frame in c.decode(video=0):
+            last_rgb = frame.to_ndarray(format="rgb24")
+    assert last_rgb is not None
+    # Quantise slightly (by 8) to tolerate H.264 4:2:0 codec ringing on block edges, and also check raw interior
+    for by in range(0, 64, 16):
+        for bx in range(0, 64, 16):
+            interior = last_rgb[by + 2:by + 14, bx + 2:bx + 14]
+            uniq = np.unique(interior.reshape(-1, 3), axis=0)
+            assert len(uniq) < 5, f"block ({bx},{by}) has {len(uniq)} distinct colours"
+
+
+check("drawing strokes use red round lines and fade after 3 s", t_draw_stroke_fades_after_3s)
+check("mask_frame flattens each 16x16 block inside the rect and leaves the rest untouched",
+      t_mask_frame_pixelates_and_leaves_rest)
+def t_shot_main_saves_png_with_test_source():
+    import av
+    shot_dir = tmp() / "shots"
+    env = {**os.environ,
+           "NOTEWELL_SCREEN_TEST_SOURCE": "testsrc=size=320x240:rate=15",
+           "NOTEWELL_SHOT_DIR": str(shot_dir)}
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); import screen_record; "
+            "sys.exit(screen_record.shot_main())")
+    r = subprocess.run([sys.executable, "-c", code, MODDIR], env=env, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, (r.returncode, r.stderr)
+    pngs = list(shot_dir.glob("Screenshot *.png"))
+    assert len(pngs) == 1, pngs
+    with av.open(str(pngs[0])) as c:
+        frame = next(c.decode(video=0))
+        assert (frame.width, frame.height) == (320, 240), (frame.width, frame.height)
+
+
+def t_build_dib_header_bytes():
+    import struct
+    import numpy as np
+    bgra = np.zeros((10, 12, 4), dtype=np.uint8)
+    bgra[0, 0] = [10, 20, 30, 0]     # top-left becomes bottom-left in bottom-up DIB
+    dib = sr.build_dib(bgra)
+    assert len(dib) == 40 + 10 * 12 * 4, len(dib)
+    biSize, w, h, planes, bpp, comp, img_size = struct.unpack_from("<IiiHHII", dib, 0)
+    assert (biSize, w, h, planes, bpp, comp, img_size) == (40, 12, 10, 1, 32, 0, 480)
+    # Row 0 of bottom-up DIB is row 9 of input; row 9 of bottom-up DIB is row 0 of input (with alpha=255)
+    last_row_off = 40 + 9 * 12 * 4
+    assert list(dib[last_row_off:last_row_off + 4]) == [10, 20, 30, 255]
+
+
+def t_shot_hotkey_default_and_config():
+    svc = sr.ScreenService(tmp(), ["unused"], get_link=lambda: None, notify=lambda t, m: None)
+    assert sr.parse_hotkey(svc.shot_hotkey()) == (0x6, 0x53), svc.shot_hotkey()    # Ctrl+Shift+S
+    svc.cfg["screenshot_hotkey"] = "ctrl+alt+p"
+    assert sr.parse_hotkey(svc.shot_hotkey()) == (0x3, 0x50)
+
+
+check("recording with mask 0,0,64,64 decodes with flat 16x16 blocks in top-left",
+      t_record_with_mask_hides_top_left)
+check("shot_main with test source saves a decodable PNG without any dialog",
+      t_shot_main_saves_png_with_test_source)
+check("build_dib writes a valid 40-byte BITMAPINFOHEADER and bottom-up BGRA pixels",
+      t_build_dib_header_bytes)
+def t_camera_bubble_fake_frames():
+    import tkinter as tk
+    import numpy as np
+    import screen_camera as sc
+
+    # Verify DirectShow log parsing on made-up device lines
+    fake_logs = [
+        (32, "dshow", '"Test Cam One"'), (32, "dshow", " (video)"),
+        (32, "dshow", '"Test Mic"'), (32, "dshow", " (audio)"),
+        (32, "dshow", '"Test Cam Two" (video)\n'),
+    ]
+    assert sc.parse_dshow_cameras(fake_logs) == ["Test Cam One", "Test Cam Two"]
+
+    # Fill the camera bubble window three times from a fake frame source off-screen
+    def fake_frames():
+        for i in range(6):
+            frame = np.full((240, 320, 3), (i * 40) % 256, dtype=np.uint8)
+            yield frame
+            time.sleep(0.05)
+
+    root = tk.Tk()
+    root.withdraw()
+    cam = sc.CameraBubble(root, tk, (-20000, -20000, 640, 480), source_fn=fake_frames, size=120)
+    try:
+        assert cam.start() is True
+        deadline = time.monotonic() + 3.0
+        while cam.updates < 3 and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.02)
+        assert cam.updates >= 3 and cam.error is None, (cam.updates, cam.error)
+    finally:
+        cam.stop()
+        root.destroy()
+
+
+check("screenshot hotkey defaults to Ctrl+Shift+S and reads screenshot_hotkey from config",
+      t_shot_hotkey_default_and_config)
+def t_rolling_buffer_off_by_default_and_saves_and_blocks_private():
+    import screen_buffer as sb
+
+    # Off by default on ScreenService
+    svc = sr.ScreenService(tmp(), ["unused"], get_link=lambda: None, notify=lambda t, m: None)
+    assert svc.buffer is None and svc.buffer_active is False
+    st = svc.status()
+    assert st["buffer_enabled"] is False and st["buffer_running"] is False
+
+    # Rolling buffer records short test segments, prunes old ones, blocks on private, saves cleanly
+    root = tmp() / "screen"
+    box = sr.Outbox(root)
+    priv = {"reasons": []}
+    buf = sb.RollingBuffer(root, keep_seconds=2.0, segment_seconds=1.0,
+                           source="testsrc=size=320x240:rate=15,realtime",
+                           check_private=lambda: priv["reasons"])
+    buf.start()
+    try:
+        deadline = time.monotonic() + 8.0
+        while len(buf.segment_paths()) < 2 and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert len(buf.segment_paths()) >= 2, buf.segment_paths()
+        # Private window open: save is blocked and no outbox job is created
+        priv["reasons"] = ["a password manager is open (Vault)"]
+        status, info = buf.save_last(box)
+        assert status == "blocked" and info and box.waiting() == [], (status, info)
+        # Clear private window: save produces a playable MP4 in outbox
+        priv["reasons"] = []
+        status, job = buf.save_last(box, title="Replay clip")
+        assert status == "saved" and job["title"] == "Replay clip" and job.get("from_buffer") is True, (status, job)
+        kinds, n = _frames(box.video(job["client_id"]))
+        assert kinds == ["audio", "video"] and n >= 15, (kinds, n)
+    finally:
+        buf.stop()
+    assert not list((root / "buffer").glob("seg-*.mp4"))
+
+
+check("camera bubble parses device logs and renders 3 fake frames without error",
+      t_camera_bubble_fake_frames)
+check("rolling last-2-minutes buffer is off by default, blocks private saves, and saves playable clips",
+      t_rolling_buffer_off_by_default_and_saves_and_blocks_private)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)

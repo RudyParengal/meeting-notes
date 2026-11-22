@@ -32,6 +32,7 @@ log = logging.getLogger("screen")
 FPS = 15
 SENT_KEEP_DAYS = 7
 DEFAULT_HOTKEY = "ctrl+shift+r"
+DEFAULT_SHOT_HOTKEY = "ctrl+shift+s"
 WDA_EXCLUDEFROMCAPTURE = 0x11
 
 # ------------------------------------------------------- never-record list ---
@@ -85,6 +86,9 @@ class Outbox:
     def video(self, cid):
         return self.dir / f"{cid}.mp4"
 
+    def untrimmed(self, cid):
+        return self.dir / f"{cid}.untrimmed.mp4"
+
     def events(self, cid):
         return self.dir / f"{cid}.events.jsonl"
 
@@ -134,7 +138,7 @@ class Outbox:
         dest = self.dir / why
         dest.mkdir(exist_ok=True)
         cid = job["client_id"]
-        for p in (self.video(cid), self._meta(cid), self.events(cid)):
+        for p in (self.video(cid), self.untrimmed(cid), self._meta(cid), self.events(cid)):
             if p.exists():
                 os.replace(p, dest / p.name)
 
@@ -143,7 +147,7 @@ class Outbox:
         job.update(state="sent", share_url=share_url, sent=time.time())
         self.save(job)
         cid = job["client_id"]
-        for p in (self.video(cid), self._meta(cid), self.events(cid)):
+        for p in (self.video(cid), self.untrimmed(cid), self._meta(cid), self.events(cid)):
             if p.exists():
                 os.replace(p, self.sent / p.name)
 
@@ -293,6 +297,62 @@ def set_clipboard_text(text: str) -> bool:
             u32.DestroyWindow(hwnd)
 
 
+def build_dib(bgra) -> bytes:
+    """Build a 32-bit bottom-up CF_DIB byte buffer from an H x W x 4 BGRA uint8 array."""
+    import struct
+    import numpy as np
+    arr = np.asarray(bgra, dtype=np.uint8)
+    if arr.ndim != 3 or arr.shape[2] != 4:
+        raise ValueError("expected H x W x 4 BGRA array")
+    h, w = int(arr.shape[0]), int(arr.shape[1])
+    pixels = np.ascontiguousarray(arr[::-1].copy())
+    pixels[:, :, 3] = 255
+    header = struct.pack("<IiiHHIIiiII", 40, w, h, 1, 32, 0, w * h * 4, 0, 0, 0, 0)
+    return header + pixels.tobytes()
+
+
+def set_clipboard_dib(dib_bytes: bytes) -> bool:
+    """Put a CF_DIB (format 8) image on the Windows clipboard."""
+    ctypes, W = _win()
+    u32 = ctypes.WinDLL("user32", use_last_error=True)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    u32.CreateWindowExW.restype = W.HWND
+    u32.CreateWindowExW.argtypes = [W.DWORD, W.LPCWSTR, W.LPCWSTR, W.DWORD, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int, W.HWND, W.HMENU, W.HINSTANCE, W.LPVOID]
+    u32.OpenClipboard.argtypes = [W.HWND]
+    u32.SetClipboardData.restype = W.HANDLE
+    u32.SetClipboardData.argtypes = [W.UINT, W.HANDLE]
+    u32.DestroyWindow.argtypes = [W.HWND]
+    k32.GlobalAlloc.restype = W.HGLOBAL
+    k32.GlobalAlloc.argtypes = [W.UINT, ctypes.c_size_t]
+    k32.GlobalLock.restype = W.LPVOID
+    k32.GlobalLock.argtypes = [W.HGLOBAL]
+    k32.GlobalUnlock.argtypes = [W.HGLOBAL]
+    k32.GlobalFree.argtypes = [W.HGLOBAL]
+    hwnd = u32.CreateWindowExW(0, "STATIC", "notewell-clip", 0, 0, 0, 0, 0, W.HWND(-3), None, None, None)
+    try:
+        for _ in range(20):
+            if u32.OpenClipboard(hwnd):
+                break
+            time.sleep(0.05)
+        else:
+            return False
+        try:
+            u32.EmptyClipboard()
+            h = k32.GlobalAlloc(0x0002, len(dib_bytes))
+            ctypes.memmove(k32.GlobalLock(h), dib_bytes, len(dib_bytes))
+            k32.GlobalUnlock(h)
+            if not u32.SetClipboardData(8, h):              # CF_DIB; Windows owns h now
+                k32.GlobalFree(h)
+                return False
+            return True
+        finally:
+            u32.CloseClipboard()
+    finally:
+        if hwnd:
+            u32.DestroyWindow(hwnd)
+
+
 def hide_from_capture(hwnd) -> bool:
     """Keep a window of ours out of screen recordings (and screenshots)."""
     ctypes, W = _win()
@@ -380,22 +440,192 @@ def hotkey_label(text):
                     for p in (text or DEFAULT_HOTKEY).lower().split("+"))
 
 
+def _clip_region(monitor, region):
+    """Clip region (x, y, w, h) to monitor (x, y, w, h) and round size down to even."""
+    mx, my, mw, mh = (int(v) for v in monitor)
+    rx, ry, rw, rh = (int(v) for v in region)
+    x1, y1 = max(mx, rx), max(my, ry)
+    x2, y2 = min(mx + mw, rx + rw), min(my + mh, ry + rh)
+    w, h = (x2 - x1) - (x2 - x1) % 2, (y2 - y1) - (y2 - y1) % 2
+    if w <= 0 or h <= 0:
+        raise ValueError("region is outside the monitor")
+    return (x1, y1, w, h)
+
+
+def capture_source(idx, monitor, region=None):
+    """ddagrab source for a whole monitor or a part of it. monitor and region are (x, y, w, h)."""
+    base = f"ddagrab=output_idx={idx}:framerate={FPS}:draw_mouse=1"
+    if region is None:
+        return f"{base},hwdownload,format=bgra"
+    x1, y1, w, h = _clip_region(monitor, region)
+    ox, oy = x1 - int(monitor[0]), y1 - int(monitor[1])
+    return f"{base}:video_size={w}x{h}:offset_x={ox}:offset_y={oy},hwdownload,format=bgra"
+
+
+def _monitor_for_rect(screens, rect):
+    """Index of the monitor holding the largest part of rect (x, y, w, h)."""
+    rx, ry, rw, rh = rect
+    best_i, best_area = 0, -1
+    for i, (mx, my, mw, mh) in enumerate(screens):
+        iw = max(0, min(mx + mw, rx + rw) - max(mx, rx))
+        ih = max(0, min(my + mh, ry + rh) - max(my, ry))
+        if iw * ih > best_area:
+            best_i, best_area = i, iw * ih
+    return best_i
+
+
+def _walk_windows():
+    """Return [(hwnd, pid, exe, title, rect)] for visible top-level windows with a title."""
+    ctypes, W = _win()
+    u32 = ctypes.WinDLL("user32", use_last_error=True)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    dwm = ctypes.WinDLL("dwmapi", use_last_error=True)
+    u32.IsWindowVisible.argtypes, u32.IsWindowVisible.restype = [W.HWND], W.BOOL
+    u32.IsIconic.argtypes, u32.IsIconic.restype = [W.HWND], W.BOOL
+    u32.GetWindowRect.argtypes, u32.GetWindowRect.restype = [W.HWND, ctypes.POINTER(W.RECT)], W.BOOL
+    u32.GetWindowTextLengthW.argtypes, u32.GetWindowTextLengthW.restype = [W.HWND], ctypes.c_int
+    u32.GetWindowTextW.argtypes, u32.GetWindowTextW.restype = [W.HWND, W.LPWSTR, ctypes.c_int], ctypes.c_int
+    u32.GetWindowThreadProcessId.argtypes = [W.HWND, ctypes.POINTER(W.DWORD)]
+    u32.GetWindowThreadProcessId.restype = W.DWORD
+    u32.EnumWindows.argtypes, u32.EnumWindows.restype = [ctypes.c_void_p, W.LPARAM], W.BOOL
+    k32.OpenProcess.argtypes, k32.OpenProcess.restype = [W.DWORD, W.BOOL, W.DWORD], W.HANDLE
+    k32.QueryFullProcessImageNameW.argtypes = [W.HANDLE, W.DWORD, W.LPWSTR, ctypes.POINTER(W.DWORD)]
+    k32.QueryFullProcessImageNameW.restype = W.BOOL
+    k32.CloseHandle.argtypes, k32.CloseHandle.restype = [W.HANDLE], W.BOOL
+    dwm.DwmGetWindowAttribute.argtypes = [W.HWND, W.DWORD, ctypes.c_void_p, W.DWORD]
+    dwm.DwmGetWindowAttribute.restype = ctypes.c_long
+
+    found = []
+    proc = ctypes.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
+
+    def each(hwnd, lp):
+        if not u32.IsWindowVisible(hwnd) or u32.IsIconic(hwnd):
+            return True
+        cloaked = W.DWORD(0)
+        dwm.DwmGetWindowAttribute(hwnd, 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked))
+        if cloaked.value:
+            return True
+        n = u32.GetWindowTextLengthW(hwnd)
+        if n <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(n + 1)
+        u32.GetWindowTextW(hwnd, buf, n + 1)
+        title = buf.value.strip()
+        if not title:
+            return True
+        r = W.RECT()
+        # Attribute 9 = DWMWA_EXTENDED_FRAME_BOUNDS (visible frame without drop shadow).
+        if dwm.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(r), ctypes.sizeof(r)) != 0:
+            u32.GetWindowRect(hwnd, ctypes.byref(r))
+        w, h = r.right - r.left, r.bottom - r.top
+        if w < 100 or h < 100:
+            return True
+        pid = W.DWORD(0)
+        u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        exe = ""
+        hp = k32.OpenProcess(0x1000, False, pid.value)
+        if hp:
+            try:
+                size, big = W.DWORD(32768), ctypes.create_unicode_buffer(32768)
+                if k32.QueryFullProcessImageNameW(hp, 0, big, ctypes.byref(size)):
+                    exe = big.value.rsplit("\\", 1)[-1]
+            finally:
+                k32.CloseHandle(hp)
+        found.append((int(hwnd), int(pid.value), exe, title, (r.left, r.top, w, h)))
+        return True
+
+    cb = proc(each)
+    u32.EnumWindows(ctypes.cast(cb, ctypes.c_void_p), 0)
+    return found
+
+
+def pick_windows(walk=None, own_pid=None, blocked_apps=None):
+    """Visible top-level windows with a title, as [(hwnd, exe, title, rect)].
+    Leaves out windows of this process and every window never_record_reasons flags."""
+    my_pid = os.getpid() if own_pid is None else own_pid
+    items = _walk_windows() if walk is None else walk()
+    out = []
+    for hwnd, pid, exe, title, rect in items:
+        if pid == my_pid or not (title or "").strip():
+            continue
+        if never_record_reasons([(exe, title)], blocked_apps=blocked_apps):
+            continue
+        out.append((hwnd, exe, title, rect))
+    return out
+
+
+def mask_frame(bgra, rects, block=16):
+    """Pixelate each rect in place on an H x W x 4 uint8 array; return the array."""
+    h, w = bgra.shape[:2]
+    step = max(1, int(block))
+    for rx, ry, rw, rh in rects:
+        x1 = max(0, min(w, int(rx)))
+        y1 = max(0, min(h, int(ry)))
+        x2 = max(0, min(w, int(rx) + int(rw)))
+        y2 = max(0, min(h, int(ry) + int(rh)))
+        if x2 <= x1 or y2 <= y1:
+            continue
+        for y in range(y1, y2, step):
+            ye = min(y + step, y2)
+            for x in range(x1, x2, step):
+                xe = min(x + step, x2)
+                bgra[y:ye, x:xe] = bgra[y:ye, x:xe].mean(axis=(0, 1), dtype=float).astype(bgra.dtype)
+    return bgra
+
+
 # ============================================================ the recording ===
 class Capture:
     """Screen + microphone into one MP4. Runs in the child copy."""
 
-    def __init__(self, path: Path, output_idx: int, source=None):
+    def __init__(self, path: Path, output_idx: int, source=None, mic=True, monitor=None, region=None):
         self.path, self.idx = Path(path), output_idx
+        self.want_mic = bool(mic)
         # A made-up test picture instead of the screen, for tests only.
         self.test = bool(source)
-        self.source = source or (f"ddagrab=output_idx={output_idx}:framerate={FPS}:draw_mouse=1,"
-                                 f"hwdownload,format=bgra")
+        if source:
+            self.source = source
+        elif monitor is not None:
+            self.source = capture_source(output_idx, monitor, region)
+        else:
+            self.source = capture_source(output_idx, (0, 0, 0, 0), None)
         self.stop_ev = threading.Event()
         self.lock = threading.Lock()
+        self._paused_at = None
+        self.muted = False
+        self.masks = []
         self.error = None
         self.mic_ok = False
         self.encoder = None
         self.frames = 0
+
+    def add_mask(self, rect):
+        rx, ry, rw, rh = (int(v) for v in rect)
+        if rw > 0 and rh > 0:
+            with self.lock:
+                self.masks.append((rx, ry, rw, rh))
+
+    def clear_masks(self):
+        with self.lock:
+            self.masks.clear()
+
+    def mute(self, on: bool):
+        with self.lock:
+            self.muted = bool(on)
+
+    def pause(self):
+        with self.lock:
+            if self._paused_at is None:
+                self._paused_at = time.monotonic()
+
+    def resume(self):
+        with self.lock:
+            if self._paused_at is not None:
+                self.t0 += time.monotonic() - self._paused_at
+                self._paused_at = None
+
+    @property
+    def paused(self):
+        return self._paused_at is not None
 
     def start(self):
         import av
@@ -404,7 +634,7 @@ class Capture:
         first = next(self.src.decode(video=0))
         w, h = first.width - first.width % 2, first.height - first.height % 2
         enc, fmt, opts = self._pick_encoder(w, h)
-        mic = self._open_mic()
+        mic = self._open_mic() if self.want_mic else None
         # Fragmented MP4: what is written so far stays playable if this process dies.
         self.out = av.open(str(self.path), "w", format="mp4",
                            options={"movflags": "frag_keyframe+empty_moov+default_base_moof"})
@@ -473,20 +703,32 @@ class Capture:
                 self.out.mux(p)
 
     def _video(self, first):
+        import av
         from fractions import Fraction
         try:
             last = -1
             frame = first
             frames = self.src.decode(video=0)
             while True:
-                pts = int((time.monotonic() - self.t0) * 1000)
-                if pts <= last:
-                    pts = last + 1
-                f = frame.reformat(width=self.v.width, height=self.v.height, format=self.fmt)
-                f.pts, f.time_base = pts, Fraction(1, 1000)
-                self._mux(self.v.encode(f))
-                last = pts
-                self.frames += 1
+                with self.lock:
+                    paused = self._paused_at is not None
+                    pts = None if paused else int((time.monotonic() - self.t0) * 1000)
+                    masks = list(self.masks)
+                if not paused:
+                    if pts <= last:
+                        pts = last + 1
+                    if masks:
+                        src_f = frame if frame.format.name == "bgra" else frame.reformat(format="bgra")
+                        arr = src_f.to_ndarray()
+                        mask_frame(arr, masks)
+                        frame_in = av.VideoFrame.from_ndarray(arr, format="bgra")
+                    else:
+                        frame_in = frame
+                    f = frame_in.reformat(width=self.v.width, height=self.v.height, format=self.fmt)
+                    f.pts, f.time_base = pts, Fraction(1, 1000)
+                    self._mux(self.v.encode(f))
+                    last = pts
+                    self.frames += 1
                 if self.stop_ev.is_set():
                     break
                 frame = next(frames)
@@ -507,14 +749,25 @@ class Capture:
         import numpy as np
         try:
             pts = None
+            min_pts = 0
             while not self.stop_ev.is_set():
                 block = mic.record(numframes=1024)
+                with self.lock:
+                    paused = self._paused_at is not None
+                    muted = self.muted
+                    t0 = self.t0
+                if paused:
+                    pts = None
+                    continue
+                if muted:
+                    block = np.zeros_like(block)
                 if pts is None:     # line the sound up with the picture
-                    pts = max(0, int((time.monotonic() - self.t0) * 48000) - len(block))
+                    pts = max(min_pts, int((time.monotonic() - t0) * 48000) - len(block))
                 frame = av.AudioFrame.from_ndarray(np.ascontiguousarray(block[:, :1].T, dtype=np.float32),
                                                    format="flt", layout="mono")
                 frame.sample_rate, frame.pts, frame.time_base = 48000, pts, Fraction(1, 48000)
                 pts += len(block)
+                min_pts = pts
                 self._mux(self.a.encode(frame))
             self._mux(self.a.encode())
         except Exception as e:
@@ -528,9 +781,11 @@ class Capture:
 
     def video_ms(self):
         """Milliseconds since the first frame's clock started: the events file uses this clock."""
-        return int((time.monotonic() - self.t0) * 1000)
+        with self.lock:
+            return int(((self._paused_at or time.monotonic()) - self.t0) * 1000)
 
     def stop(self):
+        self.resume()
         self.stop_ev.set()
         for t in self.threads:
             t.join(timeout=15)
@@ -558,37 +813,315 @@ class _ToneMic:
         pass
 
 
-def _pick_screen(root, screens, mouse_idx, tk):
-    """Ask which screen. Returns its index, or None for cancel. Keys 1-9, Enter, Esc."""
-    choice = {"i": None}
+def _drag_region(root, area, tk, prompt="Drag an area. Esc to go back.", min_size=100):
+    """Dimmed overlay over area; returns dragged (x, y, w, h) in screen pixels or None."""
+    ax, ay, aw, ah = area
+    res = {"rect": None}
+    win = tk.Toplevel(root)
+    win.overrideredirect(True)
+    win.attributes("-topmost", True)
+    win.attributes("-alpha", 0.35)
+    win.geometry(f"{aw}x{ah}+{ax}+{ay}")
+    win.configure(bg="#000000", cursor="crosshair")
+    hide_from_capture(_hwnd(win))
+    cv = tk.Canvas(win, bg="#000000", highlightthickness=0, width=aw, height=ah)
+    cv.pack(fill="both", expand=True)
+    msg_id = cv.create_text(aw // 2, 36, text=prompt, fill="#ECEAF3", font=("Segoe UI", 13, "bold"))
+    drag = {"x0": None, "y0": None, "box": None}
+
+    def down(e):
+        drag["x0"], drag["y0"] = e.x, e.y
+        if drag["box"] is not None:
+            cv.delete(drag["box"])
+            drag["box"] = None
+
+    def move(e):
+        if drag["x0"] is None:
+            return
+        if drag["box"] is not None:
+            cv.delete(drag["box"])
+        drag["box"] = cv.create_rectangle(drag["x0"], drag["y0"], e.x, e.y,
+                                          outline="#EF4444", width=3)
+
+    def up(e):
+        if drag["x0"] is None:
+            return
+        x1, x2 = sorted((drag["x0"], e.x))
+        y1, y2 = sorted((drag["y0"], e.y))
+        drag["x0"] = drag["y0"] = None
+        w, h = x2 - x1, y2 - y1
+        if w < min_size or h < min_size:
+            cv.itemconfigure(msg_id, text=f"Area is too small (at least {min_size}x{min_size}). Drag again or press Esc.")
+            return
+        res["rect"] = (ax + x1, ay + y1, w, h)
+        win.destroy()
+
+    cv.bind("<ButtonPress-1>", down)
+    cv.bind("<B1-Motion>", move)
+    cv.bind("<ButtonRelease-1>", up)
+    win.bind("<Escape>", lambda e: win.destroy())
+    win.focus_force()
+    root.wait_window(win)
+    return res["rect"]
+
+
+def _pick_window_dialog(root, area, tk):
+    """List visible windows and return the chosen rect (x, y, w, h), or None on Esc."""
+    wins = pick_windows()
+    res = {"rect": None}
+    win = tk.Toplevel(root)
+    win.title("Record which window?")
+    win.attributes("-topmost", True)
+    win.configure(bg="#1C1926", padx=18, pady=14)
+    tk.Label(win, text="Record which window?", fg="#ECEAF3", bg="#1C1926",
+             font=("Segoe UI", 12, "bold")).pack(anchor="w")
+    if not wins:
+        tk.Label(win, text="No windows available to record.", fg="#B9B5C6", bg="#1C1926",
+                 font=("Segoe UI", 10)).pack(anchor="w", pady=8)
+        tk.Button(win, text="Back", command=win.destroy, width=10, relief="flat",
+                  bg="#2D2A36", fg="#ECEAF3").pack(anchor="e")
+    else:
+        lb = tk.Listbox(win, width=56, height=min(12, len(wins)), bg="#2D2A36", fg="#ECEAF3",
+                        selectbackground="#4F46E5", selectforeground="#ECEAF3",
+                        relief="flat", highlightthickness=0, font=("Segoe UI", 10))
+        for _, exe, title, _ in wins:
+            short = title if len(title) <= 50 else title[:47] + "..."
+            lb.insert("end", f"{short}  ({exe})" if exe else short)
+        lb.selection_set(0)
+        lb.pack(fill="both", expand=True, pady=(8, 6))
+
+        def choose(e=None):
+            sel = lb.curselection()
+            if sel:
+                res["rect"] = wins[sel[0]][3]
+                win.destroy()
+
+        lb.bind("<Double-Button-1>", choose)
+        win.bind("<Return>", choose)
+        row = tk.Frame(win, bg="#1C1926")
+        row.pack(fill="x")
+        tk.Button(row, text="Back (Esc)", command=win.destroy, relief="flat",
+                  bg="#2D2A36", fg="#ECEAF3", padx=10).pack(side="right")
+        tk.Button(row, text="Record window", command=choose, relief="flat",
+                  bg="#EF4444", fg="#ECEAF3", padx=10).pack(side="right", padx=6)
+        lb.focus_force()
+    win.bind("<Escape>", lambda e: win.destroy())
+    _centre(win, area)
+    if not wins:
+        win.focus_force()
+    root.wait_window(win)
+    return res["rect"]
+
+
+class _StrokeBoard:
+    """Tracks freehand strokes on a canvas and deletes each one after fade_ms."""
+
+    def __init__(self, canvas, after_fn, fade_ms=3000):
+        self.canvas = canvas
+        self.after_fn = after_fn
+        self.fade_ms = fade_ms
+        self._current = []
+        self._last = None
+
+    def on_down(self, x, y):
+        self._current = []
+        self._last = (x, y)
+
+    def on_move(self, x, y):
+        if self._last is None:
+            return
+        lx, ly = self._last
+        item = self.canvas.create_line(lx, ly, x, y, fill="#EF4444", width=4,
+                                       capstyle="round", joinstyle="round")
+        self._current.append(item)
+        self._last = (x, y)
+
+    def on_up(self, x=None, y=None):
+        if self._last is not None and not self._current:
+            lx, ly = self._last
+            item = self.canvas.create_line(lx, ly, lx + 1, ly, fill="#EF4444", width=4,
+                                           capstyle="round", joinstyle="round")
+            self._current.append(item)
+        items = list(self._current)
+        self._current.clear()
+        self._last = None
+        if items:
+            def erase():
+                for item in items:
+                    try:
+                        self.canvas.delete(item)
+                    except Exception:
+                        pass
+            self.after_fn(self.fade_ms, erase)
+
+
+class DrawOverlay:
+    """Lazy two-window drawing overlay: hidden mouse catcher + recorded click-through ink."""
+
+    _KEY = "#010203"
+
+    def __init__(self, root, tk, area, on_change=None):
+        self.root, self.tk, self.area, self.on_change = root, tk, area, on_change
+        self.on = False
+        self._built = False
+        self.catcher = self.ink = self.board = None
+
+    def _build(self):
+        ax, ay, aw, ah = self.area
+        tk = self.tk
+        ink = tk.Toplevel(self.root)
+        ink.overrideredirect(True)
+        ink.attributes("-topmost", True)
+        ink.configure(bg=self._KEY)
+        ink.attributes("-transparentcolor", self._KEY)
+        ink.geometry(f"{aw}x{ah}+{ax}+{ay}")
+        canvas = tk.Canvas(ink, bg=self._KEY, highlightthickness=0, width=aw, height=ah)
+        canvas.pack(fill="both", expand=True)
+        _click_through(_hwnd(ink))
+
+        catcher = tk.Toplevel(self.root)
+        catcher.overrideredirect(True)
+        catcher.attributes("-topmost", True)
+        catcher.attributes("-alpha", 0.004)
+        catcher.configure(bg="#000000", cursor="pencil")
+        catcher.geometry(f"{aw}x{ah}+{ax}+{ay}")
+        hide_from_capture(_hwnd(catcher))
+
+        board = _StrokeBoard(canvas, self.root.after, fade_ms=3000)
+        catcher.bind("<ButtonPress-1>", lambda e: board.on_down(e.x, e.y))
+        catcher.bind("<B1-Motion>", lambda e: board.on_move(e.x, e.y))
+        catcher.bind("<ButtonRelease-1>", lambda e: board.on_up(e.x, e.y))
+        catcher.bind("<Escape>", lambda e: self.set_on(False))
+
+        self.ink, self.catcher, self.board, self._built = ink, catcher, board, True
+
+    def set_on(self, on: bool):
+        want = bool(on)
+        if want:
+            if not self._built:
+                self._build()
+            self.catcher.deiconify()
+            self.catcher.focus_force()
+            self.on = True
+        else:
+            if self._built and self.catcher is not None:
+                self.catcher.withdraw()
+            self.on = False
+        if self.on_change is not None:
+            self.on_change(self.on)
+
+    def destroy(self):
+        for w in (self.catcher, self.ink):
+            if w is not None:
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
+        self.catcher = self.ink = self.board = None
+        self.on = self._built = False
+
+
+def _show_region_frame(root, tk, area):
+    """Thin 2 px red frame placed 2 px outside area, click-through and hidden from capture."""
+    x, y, w, h = area
+    wins = []
+    for geo in (f"{w + 8}x2+{x - 4}+{y - 4}", f"{w + 8}x2+{x - 4}+{y + h + 2}",
+                f"2x{h + 8}+{x - 4}+{y - 4}", f"2x{h + 8}+{x + w + 2}+{y - 4}"):
+        edge = tk.Toplevel(root)
+        edge.overrideredirect(True)
+        edge.configure(bg="#EF4444")
+        edge.geometry(geo)
+        edge.attributes("-topmost", True)
+        hwnd = _hwnd(edge)
+        hide_from_capture(hwnd)
+        _click_through(hwnd)
+        wins.append(edge)
+    return wins
+
+
+def _pick_screen(root, screens, mouse_idx, tk, camera_default=False):
+    """Ask what to record. Returns (screen_idx, region, mic, camera) or None for cancel."""
+    choice = {"val": None}
+    mic_var = tk.BooleanVar(value=True)
+    cam_var = tk.BooleanVar(value=bool(camera_default))
     win = tk.Toplevel(root)
     win.title("Record which screen?")
     win.attributes("-topmost", True)
     win.configure(bg="#1C1926", padx=18, pady=14)
-    tk.Label(win, text="Record which screen?", fg="#ECEAF3", bg="#1C1926",
+    tk.Label(win, text="What would you like to record?", fg="#ECEAF3", bg="#1C1926",
              font=("Segoe UI", 12, "bold")).pack(anchor="w")
     order = sorted(range(len(screens)), key=lambda i: (screens[i][0], screens[i][1]))
     names = {i: (["left", "middle", "right"][order.index(i)] if len(screens) == 3 else
                  ["left", "right"][order.index(i)] if len(screens) == 2 else f"screen {i + 1}")
              for i in range(len(screens))}
 
-    def pick(i):
-        choice["i"] = i
+    def pick(i, region=None):
+        choice["val"] = (i, region, bool(mic_var.get()), bool(cam_var.get()))
         win.destroy()
+
+    def pick_window(e=None):
+        win.withdraw()
+        rect = _pick_window_dialog(root, screens[mouse_idx], tk)
+        if rect is None:
+            win.deiconify()
+            win.focus_force()
+            return
+        mon_i = _monitor_for_rect(screens, rect)
+        try:
+            clipped = _clip_region(screens[mon_i], rect)
+        except ValueError:
+            win.deiconify()
+            win.focus_force()
+            return
+        pick(mon_i, clipped)
+
+    def pick_area(e=None):
+        win.withdraw()
+        rect = _drag_region(root, screens[mouse_idx], tk)
+        if rect is None:
+            win.deiconify()
+            win.focus_force()
+            return
+        try:
+            clipped = _clip_region(screens[mouse_idx], rect)
+        except ValueError:
+            win.deiconify()
+            win.focus_force()
+            return
+        pick(mouse_idx, clipped)
+
     for i, (x, y, w, h) in enumerate(screens):
         here = "   (mouse is here)" if i == mouse_idx else ""
-        tk.Button(win, text=f"{i + 1}   {names[i].capitalize()} screen, {w}×{h}{here}", anchor="w",
+        tk.Button(win, text=f"{i + 1}   {names[i].capitalize()} screen, {w}x{h}{here}", anchor="w",
                   width=44, command=lambda i=i: pick(i), relief="flat", bg="#2D2A36", fg="#ECEAF3",
                   activebackground="#3D3A47", font=("Segoe UI", 10)).pack(fill="x", pady=3)
         win.bind(str(i + 1), lambda e, i=i: pick(i))
-    tk.Label(win, text="Enter = the screen with the mouse.  Esc = cancel.", fg="#B9B5C6", bg="#1C1926",
-             font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0))
+    tk.Button(win, text="W   One window...", anchor="w", width=44, command=pick_window,
+              relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
+              font=("Segoe UI", 10)).pack(fill="x", pady=3)
+    tk.Button(win, text="R   Drag an area...", anchor="w", width=44, command=pick_area,
+              relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
+              font=("Segoe UI", 10)).pack(fill="x", pady=3)
+    opts = tk.Frame(win, bg="#1C1926")
+    opts.pack(fill="x", pady=(6, 0))
+    tk.Checkbutton(opts, text="Record sound", variable=mic_var, bg="#1C1926", fg="#ECEAF3",
+                   selectcolor="#2D2A36", activebackground="#1C1926", activeforeground="#ECEAF3",
+                   font=("Segoe UI", 10)).pack(side="left")
+    tk.Checkbutton(opts, text="Show camera", variable=cam_var, bg="#1C1926", fg="#ECEAF3",
+                   selectcolor="#2D2A36", activebackground="#1C1926", activeforeground="#ECEAF3",
+                   font=("Segoe UI", 10)).pack(side="left", padx=(16, 0))
+    tk.Label(win, text="Enter = whole screen with mouse.  W = window.  R = area.  Esc = cancel.",
+             fg="#B9B5C6", bg="#1C1926", font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0))
+    win.bind("w", pick_window)
+    win.bind("W", pick_window)
+    win.bind("r", pick_area)
+    win.bind("R", pick_area)
     win.bind("<Return>", lambda e: pick(mouse_idx))
     win.bind("<Escape>", lambda e: win.destroy())
     _centre(win, screens[mouse_idx])
     win.focus_force()
     root.wait_window(win)
-    return choice["i"]
+    return choice["val"]
 
 
 def _warn(root, reasons, area, tk):
@@ -642,6 +1175,7 @@ EFFECTS = {
     "start":   ("#EF4444", "\u25cf  Recording", "Press {key} again to stop"),
     "stop":    ("#828CFF", "\u25a0  Stopped", "Getting your link\u2026"),
     "copied":  ("#10B981", "\u2713  Link copied", "Ready to paste: Ctrl+V"),
+    "shot":    ("#10B981", "\u2713  Screenshot copied", "Ready to paste: Ctrl+V"),
     "waiting": ("#F59E0B", "Saved on this PC", "The link is copied when it uploads"),
 }
 
@@ -701,6 +1235,143 @@ def show_effect(root, tk, area, kind, key="", ms=1600):
     return wins
 
 
+def _pick_shot(root, monitor, tk):
+    """Ask whole screen (Enter) or dragged area (R). Returns (True, region) or None on cancel."""
+    choice = {"val": None}
+    win = tk.Toplevel(root)
+    win.title("Take a screenshot")
+    win.attributes("-topmost", True)
+    win.configure(bg="#1C1926", padx=18, pady=14)
+    tk.Label(win, text="Take a screenshot", fg="#ECEAF3", bg="#1C1926",
+             font=("Segoe UI", 12, "bold")).pack(anchor="w")
+
+    def whole(e=None):
+        choice["val"] = (True, None)
+        win.destroy()
+
+    def area(e=None):
+        win.withdraw()
+        rect = _drag_region(root, monitor, tk, prompt="Drag an area for the screenshot. Esc to go back.")
+        if rect is None:
+            win.deiconify()
+            win.focus_force()
+            return
+        try:
+            clipped = _clip_region(monitor, rect)
+        except ValueError:
+            win.deiconify()
+            win.focus_force()
+            return
+        choice["val"] = (True, clipped)
+        win.destroy()
+
+    w, h = monitor[2], monitor[3]
+    tk.Button(win, text=f"Enter   Whole screen, {w}x{h}", anchor="w", width=40, command=whole,
+              relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
+              font=("Segoe UI", 10)).pack(fill="x", pady=3)
+    tk.Button(win, text="R   Drag an area...", anchor="w", width=40, command=area,
+              relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
+              font=("Segoe UI", 10)).pack(fill="x", pady=3)
+    tk.Label(win, text="Enter = whole screen.  R = drag area.  Esc = cancel.", fg="#B9B5C6",
+             bg="#1C1926", font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0))
+    win.bind("<Return>", whole)
+    win.bind("r", area)
+    win.bind("R", area)
+    win.bind("<Escape>", lambda e: win.destroy())
+    _centre(win, monitor)
+    win.focus_force()
+    root.wait_window(win)
+    return choice["val"]
+
+
+def _save_png(frame, path: Path):
+    import av
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rgb = frame.reformat(format="rgb24")
+    with av.open(str(path), "w", format="image2") as out:
+        stream = out.add_stream("png")
+        stream.width = rgb.width
+        stream.height = rgb.height
+        stream.pix_fmt = "rgb24"
+        for pkt in stream.encode(rgb):
+            out.mux(pkt)
+        for pkt in stream.encode():
+            out.mux(pkt)
+
+
+def shot_main() -> int:
+    """`Notewell.exe --screen-shot`: grab one frame, save PNG, copy CF_DIB, show toast."""
+    import ctypes
+    import ctypes.wintypes
+    try:
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    except Exception:
+        pass
+    import av
+    import numpy  # noqa: F401
+    test_source = os.environ.get("NOTEWELL_SCREEN_TEST_SOURCE")
+    shot_dir = Path(os.environ["NOTEWELL_SHOT_DIR"]) if os.environ.get("NOTEWELL_SHOT_DIR") else (
+        Path(os.environ.get("USERPROFILE") or str(Path.home())) / "Pictures" / "Notewell")
+    auto = bool(os.environ.get("NOTEWELL_SHOT_AUTO"))
+
+    screens = monitors()
+    pt = ctypes.wintypes.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+    mon_idx = next((i for i, (x, y, w, h) in enumerate(screens)
+                    if x <= pt.x < x + w and y <= pt.y < y + h), 0)
+    mon = screens[mon_idx]
+
+    root = None
+    tk = None
+    region = None
+    if test_source:
+        source = test_source
+    else:
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        if auto:
+            raw_r = os.environ.get("NOTEWELL_SCREEN_REGION")
+            if raw_r:
+                region = _clip_region(mon, tuple(int(v) for v in raw_r.split(",")))
+        else:
+            picked = _pick_shot(root, mon, tk)
+            if picked is None:
+                root.destroy()
+                return 0
+            _, region = picked
+        area = region or mon
+        reasons = never_record_reasons(visible_windows(area))
+        if reasons and not _warn(root, reasons, mon, tk):
+            root.destroy()
+            return 0
+        root.update()
+        time.sleep(0.05)
+        source = capture_source(mon_idx, mon, region)
+
+    with av.open(source, format="lavfi") as src:
+        frame = next(src.decode(video=0))
+    stamp = time.strftime("%Y-%m-%d %H-%M-%S")
+    out_path = shot_dir / f"Screenshot {stamp}.png"
+    n = 1
+    while out_path.exists():
+        out_path = shot_dir / f"Screenshot {stamp}-{n}.png"
+        n += 1
+    _save_png(frame, out_path)
+    log.info("saved screenshot %s (%dx%d)", out_path.name, frame.width, frame.height)
+
+    if not test_source:
+        bgra = frame.reformat(format="bgra").to_ndarray()
+        set_clipboard_dib(build_dib(bgra))
+        show_effect(root, tk, mon, "shot", ms=1800)
+        end_at = time.monotonic() + 1.9
+        while time.monotonic() < end_at:
+            root.update()
+            time.sleep(0.03)
+        root.destroy()
+    return 0
+
+
 def flash_main(kind, area=None) -> int:
     """`Notewell.exe --screen-flash <kind>`: one flash on the screen with the
     mouse, then exit. The main copy cannot draw windows itself."""
@@ -735,7 +1406,8 @@ def start_events(box, job, cap, area, test_mode):
             box.events(job["client_id"]), area, cap.video_ms, (cap.v.width, cap.v.height),
             is_private=lambda exe, title: bool(never_record_reasons([(exe, title)])),
             probe=None if test_mode else screen_events.WinProbe(os.getpid()),
-            own_pid=os.getpid())
+            own_pid=os.getpid(),
+            paused=lambda: cap.paused)
         w.start()
         return w
     except Exception:
@@ -749,6 +1421,179 @@ def stop_events(w):
             w.stop()
         except Exception:
             log.exception("screen events did not stop cleanly")
+
+
+def parse_trim(start_text, end_text, seconds):
+    """Parse trim fields (m:ss); see screen_trim.parse_trim."""
+    import screen_trim
+    return screen_trim.parse_trim(start_text, end_text, seconds)
+
+
+def _review_dialog(root, tk, job, video_path, seconds, area, stop_asked, stdin_closed, review_cmds):
+    """Show the review window after Stop. Returns (action, title, trim_range).
+
+    Esc, closing the window, or pressing the hotkey again all mean Send so a
+    person who walks away still gets the link.
+    """
+    import screen_trim
+
+    res = {"val": ("send", job["title"], None)}
+    win = tk.Toplevel(root)
+    win.title("Review recording")
+    win.attributes("-topmost", True)
+    win.configure(bg="#1C1926", padx=18, pady=14)
+    secs_i = max(0, int(round(seconds)))
+    top = tk.Frame(win, bg="#1C1926")
+    top.pack(fill="x")
+    tk.Label(top, text="Review your recording", fg="#ECEAF3", bg="#1C1926",
+             font=("Segoe UI", 12, "bold")).pack(side="left")
+    tk.Label(top, text=f"{secs_i // 60}:{secs_i % 60:02d}", fg="#B9B5C6", bg="#1C1926",
+             font=("Segoe UI", 11)).pack(side="right")
+
+    tk.Label(win, text="Title", fg="#B9B5C6", bg="#1C1926", font=("Segoe UI", 9)).pack(anchor="w", pady=(10, 2))
+    title_e = tk.Entry(win, width=44, bg="#2D2A36", fg="#ECEAF3", insertbackground="#ECEAF3",
+                       relief="flat", font=("Segoe UI", 10))
+    title_e.insert(0, job["title"])
+    title_e.pack(fill="x", ipady=4)
+
+    cut = tk.Frame(win, bg="#1C1926")
+    cut.pack(fill="x", pady=(10, 0))
+    tk.Label(cut, text="Cut from start (m:ss)", fg="#B9B5C6", bg="#1C1926",
+             font=("Segoe UI", 9)).grid(row=0, column=0, sticky="w")
+    tk.Label(cut, text="Cut to (m:ss)", fg="#B9B5C6", bg="#1C1926",
+             font=("Segoe UI", 9)).grid(row=0, column=1, sticky="w", padx=(12, 0))
+    start_e = tk.Entry(cut, width=16, bg="#2D2A36", fg="#ECEAF3", insertbackground="#ECEAF3",
+                       relief="flat", font=("Segoe UI", 10))
+    start_e.grid(row=1, column=0, sticky="w", pady=(2, 0), ipady=3)
+    end_e = tk.Entry(cut, width=16, bg="#2D2A36", fg="#ECEAF3", insertbackground="#ECEAF3",
+                     relief="flat", font=("Segoe UI", 10))
+    end_e.grid(row=1, column=1, sticky="w", padx=(12, 0), pady=(2, 0), ipady=3)
+
+    err_lbl = tk.Label(win, text="", fg="#EF4444", bg="#1C1926", font=("Segoe UI", 9))
+    err_lbl.pack(anchor="w", pady=(6, 0))
+
+    def current_title():
+        return title_e.get().strip() or job["title"]
+
+    def do_send(e=None, strict=True):
+        try:
+            tr = screen_trim.parse_trim(start_e.get(), end_e.get(), seconds)
+        except ValueError as exc:
+            if strict:
+                err_lbl.config(text=str(exc))
+                return
+            tr = None
+        res["val"] = ("send", current_title(), tr)
+        win.destroy()
+
+    def do_discard():
+        res["val"] = ("discard", None, None)
+        win.destroy()
+
+    def do_play():
+        try:
+            os.startfile(str(video_path))
+        except OSError:
+            pass
+
+    row = tk.Frame(win, bg="#1C1926")
+    row.pack(fill="x", pady=(10, 0))
+    tk.Button(row, text="Play", command=do_play, relief="flat", bg="#2D2A36", fg="#ECEAF3",
+              activebackground="#3D3A47", font=("Segoe UI", 10), padx=12).pack(side="left")
+    tk.Button(row, text="Send", command=lambda: do_send(strict=True), relief="flat",
+              bg="#10B981", fg="#17141F", activebackground="#059669",
+              font=("Segoe UI", 10, "bold"), padx=14).pack(side="right")
+    tk.Button(row, text="Discard", command=do_discard, relief="flat", bg="#2D2A36", fg="#ECEAF3",
+              activebackground="#3D3A47", font=("Segoe UI", 10), padx=12).pack(side="right", padx=8)
+
+    win.bind("<Return>", lambda e: do_send(strict=True))
+    win.bind("<Escape>", lambda e: do_send(strict=False))
+    win.protocol("WM_DELETE_WINDOW", lambda: do_send(strict=False))
+
+    def poll():
+        if not win.winfo_exists():
+            return
+        if review_cmds:
+            cmd = review_cmds.pop(0)
+            if cmd == "discard":
+                do_discard()
+                return
+            if cmd == "send":
+                do_send(strict=False)
+                return
+            if cmd.startswith("trim "):
+                parts = cmd.split()
+                if len(parts) >= 3:
+                    start_e.delete(0, "end")
+                    start_e.insert(0, parts[1])
+                    end_e.delete(0, "end")
+                    end_e.insert(0, parts[2])
+                    do_send(strict=True)
+                    return
+        if stop_asked.is_set() or stdin_closed.is_set():
+            do_send(strict=False)
+            return
+        root.after(100, poll)
+
+    _centre(win, area)
+    win.focus_force()
+    root.after(100, poll)
+    root.wait_window(win)
+    return res["val"]
+
+
+def finalize_job(box, job, seconds, stopped_at, cap_info, action="send", title=None,
+                 trim_range=None, trim_video_fn=None, trim_events_fn=None):
+    """Apply Send/Trim/Discard to a finished recording. Returns (status, error_message)."""
+    cid = job["client_id"]
+    if action == "discard":
+        job.update(state="discarded", seconds=round(seconds, 1), stopped_at=stopped_at, **cap_info)
+        box.save(job)
+        box.move_aside(job, "discarded")
+        return "discarded", None
+
+    new_title = (title or "").strip() or job["title"]
+    if trim_range is not None:
+        start_s, end_s = trim_range
+        if trim_video_fn is None:
+            import screen_trim
+            trim_video_fn = screen_trim.trim_video
+        if trim_events_fn is None:
+            import screen_events
+            trim_events_fn = screen_events.trim_events
+        vid = box.video(cid)
+        untrimmed = box.untrimmed(cid)
+        ev = box.events(cid)
+        tmp_vid = vid.with_suffix(".trimmed.mp4")
+        tmp_ev = ev.with_suffix(".trimmed.jsonl")
+        try:
+            trim_video_fn(vid, tmp_vid, start_s, end_s, cap_info.get("encoder"))
+            if ev.exists():
+                trim_events_fn(ev, tmp_ev, int(round(start_s * 1000)), int(round(end_s * 1000)))
+            os.replace(vid, untrimmed)
+            os.replace(tmp_vid, vid)
+            if ev.exists() and tmp_ev.exists():
+                os.replace(tmp_ev, ev)
+        except Exception as e:
+            log.exception("screen trim failed for %s", cid)
+            for p in (tmp_vid, tmp_ev):
+                if p.exists():
+                    try:
+                        p.unlink()
+                    except OSError:
+                        pass
+            job.update(title=new_title, state="stuck", seconds=round(seconds, 1), stopped_at=stopped_at,
+                       trim=[round(start_s, 3), round(end_s, 3)], trim_error=str(e), **cap_info)
+            box.save(job)
+            box.move_aside(job, "stuck")
+            return "trim_failed", (f'Could not trim "{new_title}". '
+                                   f"The original recording is kept on this PC in {box.dir / 'stuck'}.")
+        seconds = end_s - start_s
+        job["trim"] = [round(start_s, 3), round(end_s, 3)]
+
+    job.update(title=new_title, state="ready", seconds=round(seconds, 1), stopped_at=stopped_at, **cap_info)
+    box.save(job)
+    return "ready", None
 
 
 def child_main(outbox_dir: str) -> int:
@@ -774,11 +1619,34 @@ def child_main(outbox_dir: str) -> int:
         out.flush()
 
     stop_asked = threading.Event()
+    stdin_closed = threading.Event()
+    cmd_lock = threading.Lock()
+    cmd_handler = {"fn": None}
+    pending_cmds = []
+    review_cmds = []
 
     def read_stdin():
         for line in inp:
-            if line.strip() == "stop":
+            cmd = line.strip()
+            if not cmd:
+                continue
+            if cmd == "stop":
                 stop_asked.set()
+                with cmd_lock:
+                    fn = cmd_handler["fn"]
+                if fn is not None:
+                    fn(cmd)
+                continue
+            if cmd in ("send", "discard") or cmd.startswith("trim "):
+                review_cmds.append(cmd)
+                continue
+            with cmd_lock:
+                fn = cmd_handler["fn"]
+                if fn is None:
+                    pending_cmds.append(cmd)
+                else:
+                    fn(cmd)
+        stdin_closed.set()
         stop_asked.set()                       # the main copy went away: stop too
     threading.Thread(target=read_stdin, daemon=True).start()
 
@@ -790,19 +1658,31 @@ def child_main(outbox_dir: str) -> int:
     mouse = next((i for i, (x, y, w, h) in enumerate(screens)
                   if x <= pt.x < x + w and y <= pt.y < y + h), 0)
     test_source = os.environ.get("NOTEWELL_SCREEN_TEST_SOURCE")       # tests only: no real screen
-    if test_source:
-        idx = int(os.environ.get("NOTEWELL_SCREEN_TEST_PICK", "0"))
+    test_pick = os.environ.get("NOTEWELL_SCREEN_TEST_PICK")
+    test_area = os.environ.get("NOTEWELL_SCREEN_TEST_AREA")
+    env_region = os.environ.get("NOTEWELL_SCREEN_REGION")
+    if test_source or test_pick is not None or env_region:
+        idx = int(test_pick) if test_pick is not None else (0 if test_source else mouse)
+        raw_area = test_area if test_source else env_region
+        region = tuple(int(v) for v in raw_area.split(",")) if raw_area else None
+        want_mic, want_cam = True, False
     else:
-        idx = mouse if len(screens) == 1 else _poll_dialog(root, stop_asked,
-                                                           lambda: _pick_screen(root, screens, mouse, tk))
-    if idx is None:
-        say(event="cancelled")
-        return 0
-    area = screens[idx] if idx < len(screens) else screens[0]
+        cam_default = os.environ.get("NOTEWELL_SCREEN_CAMERA") == "1"
+        picked = _poll_dialog(root, stop_asked,
+                              lambda: _pick_screen(root, screens, mouse, tk, camera_default=cam_default))
+        if picked is None:
+            say(event="cancelled")
+            return 0
+        idx, region, want_mic, want_cam = picked
+        say(event="camera_pref", enabled=want_cam)
+    mon = screens[idx] if idx < len(screens) else screens[0]
+    if region is not None and not test_source:
+        region = _clip_region(mon, region)
+    area = region or mon
     reasons = [] if test_source else never_record_reasons(visible_windows(area))
     if reasons:
         log.info("never-record warning: %d window(s)", len(reasons))
-        if not _poll_dialog(root, stop_asked, lambda: _warn(root, reasons, area, tk)):
+        if not _poll_dialog(root, stop_asked, lambda: _warn(root, reasons, mon, tk)):
             say(event="cancelled")
             return 0
     if stop_asked.is_set():
@@ -811,7 +1691,8 @@ def child_main(outbox_dir: str) -> int:
 
     box = Outbox(Path(outbox_dir).parent)
     job = box.new_job(time.strftime("Screen recording %d %b %Y %H:%M").replace(" 0", " ", 1))
-    cap = Capture(box.video(job["client_id"]), idx, source=test_source)
+    cap = Capture(box.video(job["client_id"]), idx, source=test_source, mic=want_mic,
+                  monitor=mon, region=region)
     try:
         cap.start()
     except Exception as e:
@@ -824,41 +1705,179 @@ def child_main(outbox_dir: str) -> int:
     effects = not test_source                  # tests never flash the real screen
     if effects:
         key = hotkey_label(os.environ.get("NOTEWELL_SCREEN_HOTKEY") or DEFAULT_HOTKEY)
-        show_effect(root, tk, area, "start", key=key, ms=1800)
+        show_effect(root, tk, mon, "start", key=key, ms=1800)
+    region_frame = _show_region_frame(root, tk, area) if (region is not None and not test_source) else []
+    cam_bubble = None
+    if want_cam and not test_source:
+        try:
+            import screen_camera
+            cams = screen_camera.list_cameras()
+            if cams:
+                cam_bubble = screen_camera.CameraBubble(root, tk, area, camera_name=cams[0])
+                if not cam_bubble.start():
+                    cam_bubble = None
+                    say(event="notice", message="Could not open the camera. Recording without it.")
+            else:
+                say(event="notice", message="No camera found. Recording without it.")
+        except Exception as e:
+            log.warning("camera bubble failed: %s", e)
+            cam_bubble = None
+            say(event="notice", message="Could not open the camera. Recording without it.")
 
     badge = tk.Toplevel(root)
     badge.overrideredirect(True)
     badge.attributes("-topmost", True)
     badge.configure(bg="#17141F")
-    tk.Label(badge, text="●", fg="#EF4444", bg="#17141F", font=("Segoe UI", 12)).pack(side="left", padx=(10, 4))
+    dot = tk.Label(badge, text="●", fg="#EF4444", bg="#17141F", font=("Segoe UI", 12))
+    dot.pack(side="left", padx=(10, 4))
     clock = tk.Label(badge, text="0:00", fg="#ECEAF3", bg="#17141F", font=("Segoe UI", 11))
     clock.pack(side="left")
-    tk.Button(badge, text="Stop", command=stop_asked.set, relief="flat", bg="#EF4444", fg="#ECEAF3",
-              activebackground="#DC2626", font=("Segoe UI", 10, "bold"), padx=10).pack(side="left", padx=10, pady=6)
+
+    def set_paused(on):
+        if on:
+            cap.pause()
+        else:
+            cap.resume()
+        dot.config(fg="#9CA3AF" if cap.paused else "#EF4444")
+        pause_btn.config(text="Resume" if cap.paused else "Pause")
+
+    pause_btn = tk.Button(badge, text="Pause", width=7, command=lambda: set_paused(not cap.paused),
+                          relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
+                          font=("Segoe UI", 10), padx=6)
+    pause_btn.pack(side="left", padx=(10, 0), pady=6)
+    mic_btn = None
+
+    def set_muted(on):
+        cap.mute(on)
+        if mic_btn is not None:
+            mic_btn.config(text="Mic off" if cap.muted else "Mic on",
+                           fg="#9CA3AF" if cap.muted else "#ECEAF3")
+
+    if cap.a is not None:
+        mic_btn = tk.Button(badge, text="Mic on", width=7, command=lambda: set_muted(not cap.muted),
+                            relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
+                            font=("Segoe UI", 10), padx=6)
+        mic_btn.pack(side="left", padx=(6, 0), pady=6)
+    draw_btn = None
+
+    def on_draw_change(is_on):
+        if draw_btn is not None:
+            draw_btn.config(text="Drawing" if is_on else "Draw",
+                            bg="#4F46E5" if is_on else "#2D2A36")
+        try:
+            badge.lift()
+        except tk.TclError:
+            pass
+
+    draw = DrawOverlay(root, tk, area, on_change=on_draw_change)
+    draw_btn = tk.Button(badge, text="Draw", width=7, command=lambda: draw.set_on(not draw.on),
+                         relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
+                         font=("Segoe UI", 10), padx=6)
+    draw_btn.pack(side="left", padx=(6, 0), pady=6)
+    badge.bind("<Escape>", lambda e: draw.set_on(False))
+
+    def sync_clear_btn():
+        with cap.lock:
+            has_masks = bool(cap.masks)
+        if has_masks and not clear_btn.winfo_ismapped():
+            clear_btn.pack(side="left", padx=(6, 0), pady=6, before=stop_btn)
+        elif not has_masks and clear_btn.winfo_ismapped():
+            clear_btn.pack_forget()
+
+    def add_mask_rect(rect):
+        cap.add_mask(rect)
+        sync_clear_btn()
+
+    def clear_all_masks():
+        cap.clear_masks()
+        sync_clear_btn()
+
+    def pick_hide_area():
+        if draw.on:
+            draw.set_on(False)
+        rect = _drag_region(root, area, tk, prompt="Drag an area to hide. Esc to cancel.", min_size=16)
+        if rect is not None:
+            add_mask_rect((rect[0] - area[0], rect[1] - area[1], rect[2], rect[3]))
+        try:
+            badge.lift()
+        except tk.TclError:
+            pass
+
+    tk.Button(badge, text="Hide area", command=pick_hide_area, relief="flat", bg="#2D2A36",
+              fg="#ECEAF3", activebackground="#3D3A47", font=("Segoe UI", 10), padx=6).pack(
+                  side="left", padx=(6, 0), pady=6)
+    clear_btn = tk.Button(badge, text="Clear", command=clear_all_masks, relief="flat", bg="#2D2A36",
+                          fg="#ECEAF3", activebackground="#3D3A47", font=("Segoe UI", 10), padx=6)
+    stop_btn = tk.Button(badge, text="Stop", command=stop_asked.set, relief="flat", bg="#EF4444", fg="#ECEAF3",
+                         activebackground="#DC2626", font=("Segoe UI", 10, "bold"), padx=10)
+    stop_btn.pack(side="left", padx=10, pady=6)
     badge.update_idletasks()
-    x, y, w, h = area
-    badge.geometry(f"+{x + (w - badge.winfo_reqwidth()) // 2}+{y + 8}")
+    mx, my, mw, mh = mon
+    badge.geometry(f"+{mx + (mw - badge.winfo_reqwidth()) // 2}+{my + 8}")
     hidden = hide_from_capture(_hwnd(badge))
     log.info("recording screen %d (%dx%d), encoder %s, mic %s, badge hidden from capture: %s",
-             idx + 1, w, h, cap.encoder, cap.mic_ok, hidden)
+             idx + 1, area[2], area[3], cap.encoder, cap.mic_ok, hidden)
+
+    def handle_cmd(cmd):
+        if cmd == "stop":
+            root.quit()
+        elif cmd == "pause":
+            set_paused(True)
+        elif cmd == "resume":
+            set_paused(False)
+        elif cmd == "mute":
+            set_muted(True)
+        elif cmd == "unmute":
+            set_muted(False)
+        elif cmd == "draw on":
+            draw.set_on(True)
+        elif cmd == "draw off":
+            draw.set_on(False)
+        elif cmd == "mask clear":
+            clear_all_masks()
+        elif cmd.startswith("mask "):
+            parts = cmd[5:].strip().split(",")
+            if len(parts) == 4:
+                try:
+                    add_mask_rect(tuple(int(p) for p in parts))
+                except ValueError:
+                    pass
+
+    def schedule_cmd(cmd):
+        try:
+            root.after(0, handle_cmd, cmd)
+        except Exception:
+            pass
+
+    with cmd_lock:
+        cmd_handler["fn"] = schedule_cmd
+        for c in pending_cmds:
+            schedule_cmd(c)
+        pending_cmds.clear()
 
     def tick():
         if stop_asked.is_set() or cap.stop_ev.is_set():
             root.quit()
             return
-        s = int(time.monotonic() - cap.t0)
+        s = max(0, cap.video_ms() // 1000)
         clock.config(text=f"{s // 60}:{s % 60:02d}")
         root.after(250, tick)
     # Started from inside the loop: if capture already failed, quit() before
     # mainloop() would be lost and Stop would never be noticed.
     root.after(0, tick)
     root.mainloop()
+    with cmd_lock:
+        cmd_handler["fn"] = None
     stopped_at = time.time()
+    if cam_bubble is not None:
+        cam_bubble.stop()
+    draw.destroy()
     badge.destroy()
-    # Finish the file in the background so "Stopped" shows at once.
-    shown_until = time.monotonic() + 1.5
-    if effects:
-        show_effect(root, tk, area, "stop", ms=1500)
+    for edge in region_frame:
+        try:
+            edge.destroy()
+        except tk.TclError:
+            pass
     res = {}
 
     def finish():
@@ -877,10 +1896,27 @@ def child_main(outbox_dir: str) -> int:
         raise res["error"]
     seconds = res["seconds"]
     log.info("stopped: %.1f s, %d frames, error %s", seconds, cap.frames, cap.error)
-    job.update(state="ready", seconds=round(seconds, 1), stopped_at=stopped_at, mic=cap.mic_ok,
-               encoder=cap.encoder, error=cap.error)
-    box.save(job)
-    say(event="done", client_id=job["client_id"], seconds=round(seconds, 1), stopped_at=stopped_at,
+    say(event="reviewing", client_id=job["client_id"], seconds=round(seconds, 1))
+    if test_source:
+        action, new_title, trim_range = "send", job["title"], None
+    else:
+        stop_asked.clear()
+        action, new_title, trim_range = _review_dialog(
+            root, tk, job, box.video(job["client_id"]), seconds, mon,
+            stop_asked, stdin_closed, review_cmds)
+    cap_info = {"mic": cap.mic_ok, "encoder": cap.encoder, "error": cap.error}
+    status, err_msg = finalize_job(box, job, seconds, stopped_at, cap_info,
+                                   action=action, title=new_title, trim_range=trim_range)
+    if status == "discarded":
+        say(event="discarded", client_id=job["client_id"])
+        return 0
+    if status == "trim_failed":
+        say(event="error", message=err_msg)
+        return 1
+    shown_until = time.monotonic() + 1.5
+    if effects:
+        show_effect(root, tk, mon, "stop", ms=1500)
+    say(event="done", client_id=job["client_id"], seconds=job["seconds"], stopped_at=stopped_at,
         mic=cap.mic_ok, error=cap.error, size=box.video(job["client_id"]).stat().st_size)
     while effects and time.monotonic() < shown_until:     # let "Stopped" finish showing
         root.update()
@@ -911,9 +1947,11 @@ def _poll_dialog(root, stop_asked, show):
 class ScreenService:
     """Hotkey, start/stop the recording copy, upload queue, clipboard."""
 
-    def __init__(self, home: Path, child_cmd, get_link, notify, cfg=None, flash=None):
+    def __init__(self, home: Path, child_cmd, get_link, notify, cfg=None, flash=None, shot_cmd=None, save_cfg=None):
         self.box = Outbox(Path(home) / "screen")
         self.child_cmd = list(child_cmd)
+        self.shot_cmd = list(shot_cmd) if shot_cmd is not None else None
+        self.save_cfg = save_cfg
         self.get_link = get_link            # -> linked_server.Link or None
         self.notify = notify                # (title, message)
         self.flash = flash or (lambda kind: None)   # (kind): a moment of colour on screen
@@ -927,6 +1965,7 @@ class ScreenService:
         self.last_link = None
         self._said_sign_in = False
         self._stopping = False
+        self.buffer = None
 
     # -- life
     def start(self):
@@ -935,11 +1974,24 @@ class ScreenService:
             self.box.prune_sent()
         except OSError:
             log.exception("could not tidy screen/sent")
+        if self.cfg.get("screen_replay_buffer") is True:
+            try:
+                import screen_buffer
+                self.buffer = screen_buffer.RollingBuffer(self.box.root)
+                self.buffer.start()
+            except Exception:
+                log.exception("could not start rolling last-2-minutes buffer")
+                self.buffer = None
         threading.Thread(target=self._upload_loop, daemon=True, name="screen-upload").start()
         threading.Thread(target=self._hotkey_loop, daemon=True, name="screen-hotkey").start()
 
     def shutdown(self, wait=20):
         """Quit was chosen: finish a recording in progress so it is not lost."""
+        if self.buffer is not None:
+            try:
+                self.buffer.stop()
+            except Exception:
+                log.exception("could not stop rolling buffer cleanly")
         p = self.proc
         if p and p.poll() is None:
             self._send("stop")
@@ -953,11 +2005,37 @@ class ScreenService:
     def recording(self):
         return self.proc is not None and self.proc.poll() is None
 
+    @property
+    def buffer_active(self):
+        return self.buffer is not None and self.buffer.running
+
+    def save_last_two_minutes(self):
+        if self.buffer is None:
+            return "disabled", None
+        status, info = self.buffer.save_last(self.box)
+        if status == "blocked":
+            self.notify("Last 2 minutes not saved",
+                        "A private window is open: " + "; ".join(info))
+        elif status == "saved":
+            self.wake.set()
+        return status, info
+
     def hotkey(self):
         return self.cfg.get("screen_hotkey") or DEFAULT_HOTKEY
 
+    def shot_hotkey(self):
+        return self.cfg.get("screenshot_hotkey") or DEFAULT_SHOT_HOTKEY
+
+    def take_screenshot(self):
+        if not self.shot_cmd:
+            return
+        subprocess.Popen(self.shot_cmd, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
     def label(self):
-        return "Stop screen recording" if self.recording else f"Record screen ({hotkey_label(self.hotkey())})"
+        if self.recording:
+            return "Stop screen recording"
+        suffix = " (last-2-min active)" if self.buffer_active else ""
+        return f"Record screen ({hotkey_label(self.hotkey())}){suffix}"
 
     def toggle(self):
         with self.lock:
@@ -968,7 +2046,8 @@ class ScreenService:
                 self.notify("Screen recording", "Sign in to your server in Notewell Settings first, "
                             "so the recording has somewhere to go. It will still record.")
             env = {**os.environ, "NOTEWELL_SCREEN_DIR": str(self.box.dir),
-                   "NOTEWELL_SCREEN_HOTKEY": self.hotkey()}
+                   "NOTEWELL_SCREEN_HOTKEY": self.hotkey(),
+                   "NOTEWELL_SCREEN_CAMERA": "1" if self.cfg.get("screen_camera") else "0"}
             self.proc = subprocess.Popen(self.child_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                          env=env, text=True, encoding="utf-8",
                                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -996,6 +2075,20 @@ class ScreenService:
                          ev.get("screen"), ev.get("mic"), ev.get("encoder"))
                 if not ev.get("mic"):
                     self.notify("Screen recording", "Recording without sound: the microphone is not available.")
+            elif kind == "camera_pref":
+                self.cfg["screen_camera"] = bool(ev.get("enabled"))
+                if self.save_cfg is not None:
+                    try:
+                        self.save_cfg()
+                    except Exception:
+                        log.exception("could not save camera preference")
+            elif kind == "notice":
+                self.notify("Screen recording", ev.get("message", ""))
+            elif kind == "reviewing":
+                self.started = None
+            elif kind == "discarded":
+                self.started = None
+                log.info("screen recording discarded: %s", ev.get("client_id"))
             elif kind == "done":
                 self.started = None
                 log.info("screen recording stopped: %.0f s, %.1f MB", ev.get("seconds", 0), ev.get("size", 0) / 1e6)
@@ -1015,7 +2108,9 @@ class ScreenService:
         return {"available": True, "recording": self.recording,
                 "seconds": int(time.monotonic() - self.started) if self.started and self.recording else 0,
                 "waiting": len(self.box.waiting()), "uploading": self.uploading,
-                "hotkey": hotkey_label(self.hotkey()), "last_link": self.last_link}
+                "hotkey": hotkey_label(self.hotkey()), "last_link": self.last_link,
+                "buffer_enabled": bool(self.cfg.get("screen_replay_buffer")),
+                "buffer_running": self.buffer_active}
 
     # -- upload
     def _upload_loop(self):
@@ -1084,21 +2179,40 @@ class ScreenService:
         import ctypes
         from ctypes import wintypes as W
         u32 = ctypes.windll.user32
+        registered = 0
         try:
             mods, vk = parse_hotkey(self.hotkey())
+            if u32.RegisterHotKey(None, 0x5C2E, mods | 0x4000, vk):      # MOD_NOREPEAT
+                log.info("screen hotkey %s ready", hotkey_label(self.hotkey()))
+                registered += 1
+            else:
+                log.warning("screen hotkey %s is taken by another program", self.hotkey())
+                self.notify("Screen recording", f"{hotkey_label(self.hotkey())} is already used by another "
+                            "program. Use “Record screen” in the Notewell menu instead.")
         except ValueError as e:
             log.warning("screen hotkey: %s", e)
+
+        try:
+            s_mods, s_vk = parse_hotkey(self.shot_hotkey())
+            if u32.RegisterHotKey(None, 0x5C2F, s_mods | 0x4000, s_vk):  # MOD_NOREPEAT
+                log.info("screenshot hotkey %s ready", hotkey_label(self.shot_hotkey()))
+                registered += 1
+            else:
+                log.warning("screenshot hotkey %s is taken by another program", self.shot_hotkey())
+                self.notify("Screenshot", f"{hotkey_label(self.shot_hotkey())} is already used by another "
+                            "program.")
+        except ValueError as e:
+            log.warning("screenshot hotkey: %s", e)
+
+        if not registered:
             return
-        if not u32.RegisterHotKey(None, 0x5C2E, mods | 0x4000, vk):      # MOD_NOREPEAT
-            log.warning("screen hotkey %s is taken by another program", self.hotkey())
-            self.notify("Screen recording", f"{hotkey_label(self.hotkey())} is already used by another "
-                        "program. Use “Record screen” in the Notewell menu instead.")
-            return
-        log.info("screen hotkey %s ready", hotkey_label(self.hotkey()))
         msg = W.MSG()
         while u32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
             if msg.message == 0x0312:                                     # WM_HOTKEY
                 try:
-                    self.toggle()
+                    if msg.wParam == 0x5C2F:
+                        self.take_screenshot()
+                    else:
+                        self.toggle()
                 except Exception:
-                    log.exception("screen hotkey toggle failed")
+                    log.exception("screen hotkey action failed")
