@@ -368,6 +368,25 @@ def test_the_dashboard_switches_a_link_off_and_renames(client, admin, app_module
     assert client.patch("/account/recordings/gone00", headers=admin, json={"share_on": True}).status_code == 404
 
 
+def test_the_share_box_sends_password_and_end_date(client, admin, app_module, monkeypatch):
+    changed = _with_recordings(app_module, monkeypatch)
+    r = client.patch("/account/recordings/abc123", headers=admin,
+                     json={"password": "made-up-pw", "expires_at": "2026-12-01T09:00:00.000Z"})
+    assert r.status_code == 200
+    assert client.patch("/account/recordings/abc123", headers=admin, json={"password": "", "expires_at": None}).status_code == 200
+    assert changed == [("abc123", {"password": "made-up-pw", "expires_at": "2026-12-01T09:00:00.000Z"}),
+                       ("abc123", {"password": "", "expires_at": None})]
+
+
+def test_a_short_password_or_odd_date_is_refused_here(client, admin, app_module, monkeypatch):
+    changed = _with_recordings(app_module, monkeypatch)
+    r = client.patch("/account/recordings/abc123", headers=admin, json={"password": "short"})
+    assert r.status_code == 422 and "8 characters" in r.json()["detail"] and "short" not in r.text
+    r = client.patch("/account/recordings/abc123", headers=admin, json={"expires_at": "next week"})
+    assert r.status_code == 422 and "date" in r.json()["detail"]
+    assert changed == []
+
+
 def test_recordings_need_this_pc_signed_in_and_say_so(client, admin, app_module, monkeypatch):
     _with_recordings(app_module, monkeypatch, linked=False)
     r = client.get("/account/recordings", headers=admin)

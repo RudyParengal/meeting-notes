@@ -889,6 +889,9 @@ async def account_sign_in(req: AccountSignIn, admin: dict = Depends(admin_only))
 class RecordingChange(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=200)
     share_on: Optional[bool] = None
+    # The Share box (22 Nov 2026): password '' removes it; expires_at null clears the end date.
+    password: str | None = None
+    expires_at: Optional[str] = Field(None, max_length=40)
 
 
 async def _on_server(name: str, *args):
@@ -920,7 +923,16 @@ async def account_recordings(admin: dict = Depends(admin_only)):
 @app.patch("/account/recordings/{rid}")
 async def account_change_recording(req: RecordingChange, rid: str = PathParam(..., max_length=64),
                                    admin: dict = Depends(admin_only)):
-    return await _on_server("change_recording", rid, req.model_dump(exclude_unset=True))
+    changes = req.model_dump(exclude_unset=True)
+    # Same rules as the server, checked here so the box shows the reason instead of "could not be reached".
+    if changes.get("password") and len(changes["password"]) < 8:
+        raise HTTPException(422, "The password needs at least 8 characters.")
+    if changes.get("expires_at"):
+        try:
+            datetime.fromisoformat(changes["expires_at"].replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(422, "The end date is not a date and time.")
+    return await _on_server("change_recording", rid, changes)
 
 
 # ------------------------------------------------------------- dashboard ---

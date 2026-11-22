@@ -484,12 +484,14 @@ def test_recordings_are_read_from_the_server(link):
     assert link.recordings() == [{"id": "abc123", "title": "Made-up"}] and asked == ["/recordings"]
 
 
-def test_only_the_title_and_link_switch_are_sent(link):
+def test_only_the_title_and_share_box_fields_are_sent(link):
     sent = []
     link._send = lambda method, path, **kw: sent.append((method, path, kw)) or Reply({"id": "abc123", "share_on": False})
-    out = link.change_recording("abc123", {"share_on": False, "title": "New name", "password": "not-real"})
+    out = link.change_recording("abc123", {"share_on": False, "title": "New name", "password": "made-up-pw",
+                                           "expires_at": None, "owner": "someone@example.test"})
     assert out == {"id": "abc123", "share_on": False}
-    assert sent == [("PATCH", "/recordings/abc123", {"json": {"share_on": False, "title": "New name"}})]
+    assert sent == [("PATCH", "/recordings/abc123", {"json": {"share_on": False, "title": "New name",
+                                                               "password": "made-up-pw", "expires_at": None}})]
 
 
 def test_an_odd_recording_id_is_refused_before_anything_is_sent(link):

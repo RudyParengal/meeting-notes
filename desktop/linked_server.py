@@ -282,10 +282,10 @@ class Link:
         return self._get("/recordings").get("recordings", [])
 
     def change_recording(self, rid: str, changes: dict) -> dict:
-        """Rename a recording or switch its link on or off. Nothing else is passed on."""
+        """Rename a recording, or the Share box's link switch, password and end date. Nothing else is passed on."""
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", rid or ""):
             raise ValueError("not a recording id")
-        body = {k: changes[k] for k in ("title", "share_on") if k in changes}
+        body = {k: changes[k] for k in ("title", "share_on", "password", "expires_at") if k in changes}
         return self._send("PATCH", f"/recordings/{rid}", json=body).json()
 
     def changes(self):

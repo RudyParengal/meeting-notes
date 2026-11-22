@@ -1189,14 +1189,21 @@ async function loadRecordings() {
         h('div', { class: 'hint' }, bits.join(' · '))),
       ready && x.share_url ? h('button', { class: 'btn btn-sm', onclick: function() { copyText(x.share_url, 'Link copied'); } }, 'Copy link') : null,
       ready && x.share_url ? h('a', { class: 'btn btn-sm', href: x.share_url, target: '_blank', rel: 'noopener noreferrer' }, 'Watch') : null,
-      ready ? h('button', { class: 'btn btn-sm', onclick: async function(ev) {
-        ev.target.disabled = true;
-        var c = await api('/account/recordings/' + encodeURIComponent(x.id), { method: 'PATCH', json: { share_on: !x.share_on } });
-        if (!c.ok) { toast('Not changed: ' + await errorText(c)); ev.target.disabled = false; return; }
-        toast(x.share_on ? 'Link switched off: nobody can watch it now' : 'Link switched on');
-        recShown = null; loadRecordings(); } }, x.share_on ? 'Switch link off' : 'Switch link on') : null));
+      // One Share box, the same as the website and phone (22 Nov 2026): link on or off, password and end date, one Save.
+      ready ? h('button', { class: 'btn btn-sm', onclick: async function() {
+        var saved = await nwShareBox({ title: x.title || 'Screen recording', url: x.share_url, on: x.share_on, passwordSet: x.password_set,
+                                       expires: x.share_expires, save: function(ch) { return saveRecording(x.id, ch); } });
+        if (saved) { toast('Sharing settings saved'); recShown = null; loadRecordings(); } } }, 'Share…') : null));
   });
   box.appendChild(card);
+}
+
+// The Share box's Save: '' when it worked, otherwise the reason, shown inside the box.
+async function saveRecording(id, changes) {
+  try {
+    var c = await api('/account/recordings/' + encodeURIComponent(id), { method: 'PATCH', json: changes });
+    return c.ok ? '' : await errorText(c);
+  } catch (e) { return 'Could not reach Notewell. Check the connection and try again.'; }
 }
 
 function aiCard() {

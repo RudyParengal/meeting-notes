@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.7.3: One Share box for screen recordings (22 Nov 2026)
+
+### Changed
+- **Screen recordings use the same Share box as the website and phone.** One box holds the link switch, a password and an end date, with one Save. Before, the app only had a button to switch the link on or off.
+- **If a password is too short or a date is wrong, the box says why.** Before, it would have said the server could not be reached.
+
 ## 2.7.2 — Plainer boxes, messages and empty lists (20 Nov 2026)
 
 ### Changed
