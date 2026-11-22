@@ -406,8 +406,55 @@ def t_watcher_paused_skips_clicks_and_resets_buttons():
 
 
 check("Capture.video_ms returns milliseconds since t0", t_capture_video_ms)
+def t_trim_events_keeps_range_and_carries_window():
+    src = tmp() / "in.events.jsonl"
+    dst = tmp() / "out.events.jsonl"
+    lines = [
+        {"v": 1, "started_utc": "2026-11-23T14:05:09Z", "os": "Windows 10.0.26300",
+         "app": "2.7.4", "screen": {"x": 0, "y": 0, "w": 1920, "h": 1080}, "video": [1920, 1080]},
+        {"t": 40, "k": "window", "app": "notepad.exe", "title": "First"},
+        {"t": 500, "k": "window", "app": "chrome.exe", "title": "Second"},
+        {"t": 800, "k": "click", "b": "left", "x": 10, "y": 20},
+        {"t": 1200, "k": "click", "b": "left", "x": 30, "y": 40},
+        {"t": 2500, "k": "typing", "ms": 300},
+        {"t": 3500, "k": "click", "b": "right", "x": 50, "y": 60},
+        {"t": 4000, "k": "end", "lines": 7, "cut": False},
+    ]
+    src.write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in lines), encoding="utf-8")
+    se.trim_events(src, dst, 1000, 3000)
+    got = [json.loads(ln) for ln in dst.read_text(encoding="utf-8").splitlines()]
+    assert got[0] == lines[0], got[0]
+    assert got[1:] == [
+        {"t": 0, "k": "window", "app": "chrome.exe", "title": "Second"},
+        {"t": 200, "k": "click", "b": "left", "x": 30, "y": 40},
+        {"t": 1500, "k": "typing", "ms": 300},
+        {"t": 2000, "k": "end", "lines": 4, "cut": False},
+    ], got[1:]
+
+    # Also test carrying a private line from before start
+    src2 = tmp() / "in2.events.jsonl"
+    dst2 = tmp() / "out2.events.jsonl"
+    lines2 = [
+        lines[0],
+        {"t": 100, "k": "window", "app": "notepad.exe", "title": "First"},
+        {"t": 600, "k": "private"},
+        {"t": 1500, "k": "window", "app": "notepad.exe", "title": "Back"},
+        {"t": 3000, "k": "end", "lines": 4, "cut": True},
+    ]
+    src2.write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in lines2), encoding="utf-8")
+    se.trim_events(src2, dst2, 1000, 2500)
+    got2 = [json.loads(ln) for ln in dst2.read_text(encoding="utf-8").splitlines()]
+    assert got2[1:] == [
+        {"t": 0, "k": "private"},
+        {"t": 500, "k": "window", "app": "notepad.exe", "title": "Back"},
+        {"t": 1500, "k": "end", "lines": 3, "cut": True},
+    ], got2[1:]
+
+
 check("Watcher flushes typing on pause, skips clicks while paused, and resets held buttons on resume",
       t_watcher_paused_skips_clicks_and_resets_buttons)
+check("trim_events keeps [start, end], carries last window/private to t=0, and recounts lines",
+      t_trim_events_keeps_range_and_carries_window)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)

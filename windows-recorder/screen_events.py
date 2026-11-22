@@ -400,3 +400,46 @@ class Watcher:
             self._writer.end(now)
         except Exception:
             log.exception("screen events stop failed")
+
+
+def trim_events(src, dst, start_ms, end_ms):
+    """Trim an events JSONL file to [start_ms, end_ms], shifting timestamps to start at 0."""
+    start_i, end_i = int(start_ms), int(end_ms)
+    if start_i < 0 or end_i < start_i:
+        raise ValueError("invalid trim range")
+    raw_lines = [ln for ln in Path(src).read_text(encoding="utf-8").splitlines() if ln.strip()]
+    if not raw_lines:
+        raise ValueError("empty events file")
+    rows = [json.loads(ln) for ln in raw_lines]
+    header = rows[0]
+    events, orig_cut = [], False
+    for idx, row in enumerate(rows[1:]):
+        if row.get("k") == "end":
+            orig_cut = bool(row.get("cut", False))
+        elif "t" in row:
+            events.append((int(row["t"]), idx, row))
+    events.sort(key=lambda item: (item[0], item[1]))
+    carry = None
+    kept = []
+    for t, _, row in events:
+        if t < start_i:
+            if row.get("k") in ("window", "private"):
+                carry = row
+        elif t <= end_i:
+            shifted = dict(row)
+            shifted["t"] = t - start_i
+            if shifted.get("k") == "typing" and "ms" in shifted:
+                shifted["ms"] = max(0, min(int(shifted["ms"]), end_i - t))
+            kept.append(shifted)
+    out = [header]
+    if carry is not None:
+        carried = dict(carry)
+        carried["t"] = 0
+        out.append(carried)
+    out.extend(kept)
+    out.append({"t": end_i - start_i, "k": "end", "lines": len(out), "cut": orig_cut})
+    dst_p = Path(dst)
+    tmp_p = dst_p.with_suffix(".jsonl.new")
+    text = "".join(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n" for obj in out)
+    tmp_p.write_text(text, encoding="utf-8", newline="\n")
+    os.replace(tmp_p, dst_p)

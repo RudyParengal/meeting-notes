@@ -788,7 +788,87 @@ check("capture_source whole monitor omits video_size", t_capture_source_whole_mo
 check("capture_source region builds exact ddagrab offsets and even size", t_capture_source_region_exact)
 check("capture_source clips partial regions and rejects outside ones", t_capture_source_clipped_and_outside)
 check("NOTEWELL_SCREEN_TEST_AREA sets the events header screen", t_header_with_test_area)
+def t_parse_trim_table():
+    import screen_trim as st
+    assert st.parse_trim("", "", 30.0) is None
+    assert st.parse_trim("   ", "", 30.0) is None
+    assert st.parse_trim("0:05", "0:20", 30.0) == (5.0, 20.0)
+    assert st.parse_trim("", "0:15", 30.0) == (0.0, 15.0)
+    assert st.parse_trim("0:10", "", 30.0) == (10.0, 30.0)
+    assert st.parse_trim("0:05", "1:00", 30.0) == (5.0, 30.0)   # clipped past the end
+    assert sr.parse_trim("0:02", "0:07", 10.0) == (2.0, 7.0)
+    for bad_s, bad_e in (("0:20", "0:05"), ("0:10", "0:10"), ("0:10", "0:10.5"), ("bad", "0:20"), ("0:75", "1:00")):
+        try:
+            st.parse_trim(bad_s, bad_e, 30.0)
+            raise AssertionError(f"accepted {(bad_s, bad_e)}")
+        except ValueError:
+            pass
+
+
+def t_trim_video_4s_cut_1_to_3():
+    import screen_trim as st
+    home, events = _record_script([(4.0, "stop")])
+    done = [e for e in events if e.get("event") == "done"]
+    assert done and not done[0]["error"], events
+    box = sr.Outbox(home / "screen")
+    job = box.waiting()[0]
+    src = box.video(job["client_id"])
+    dst = tmp() / "trimmed.mp4"
+    st.trim_video(src, dst, 1.0, 3.0, job["encoder"])
+    v_pts, a_pts, v_dur = _pts_and_duration(dst)
+    assert 1.8 <= v_dur <= 2.3, f"trimmed duration {v_dur:.2f} s"
+    assert len(v_pts) >= 20 and all(v_pts[i] < v_pts[i + 1] for i in range(len(v_pts) - 1)), v_pts[:10]
+    assert len(a_pts) >= 20 and all(a_pts[i] < a_pts[i + 1] for i in range(len(a_pts) - 1)), a_pts[:10]
+
+
+def t_failed_trim_moves_to_stuck_and_never_uploads():
+    srv = FakeServer()
+    home = tmp()
+    svc = sr.ScreenService(home, ["unused"], get_link=lambda: _Link(srv), notify=lambda t, m: None)
+    job = svc.box.new_job("Trim fail clip")
+    cid = job["client_id"]
+    svc.box.video(cid).write_bytes(_video_file().read_bytes())
+    svc.box.events(cid).write_bytes(_events_file().read_bytes())
+
+    def boom(*a, **kw):
+        raise RuntimeError("encoder error")
+
+    status, msg = sr.finalize_job(svc.box, job, 10.0, time.time(),
+                                  {"mic": True, "encoder": "libx264", "error": None},
+                                  action="send", title="Renamed", trim_range=(1.0, 5.0),
+                                  trim_video_fn=boom)
+    assert status == "trim_failed" and "Renamed" in msg, (status, msg)
+    assert (svc.box.dir / "stuck" / f"{cid}.mp4").exists()
+    assert (svc.box.dir / "stuck" / f"{cid}.json").exists()
+    assert svc.box.waiting() == []
+    svc.upload_waiting()
+    assert srv.puts == 0 and srv.data == b""
+
+
+def t_discard_and_untrimmed_move_aside():
+    box = sr.Outbox(tmp())
+    j1 = box.new_job("Drop me")
+    cid1 = j1["client_id"]
+    box.video(cid1).write_bytes(b"v1")
+    status, _ = sr.finalize_job(box, j1, 3.0, time.time(),
+                                {"mic": True, "encoder": "libx264", "error": None}, action="discard")
+    assert status == "discarded"
+    assert (box.dir / "discarded" / f"{cid1}.mp4").exists()
+    assert box.waiting() == []
+
+    j2 = box.new_job("Keep untrimmed")
+    cid2 = j2["client_id"]
+    box.video(cid2).write_bytes(b"v2")
+    box.untrimmed(cid2).write_bytes(b"orig")
+    box.mark_sent(j2, "https://example.test/v/ok")
+    assert (box.sent / f"{cid2}.untrimmed.mp4").exists()
+
+
 check("pick_windows excludes our own pid and private windows", t_pick_windows_excludes_own_pid_and_private)
+check("parse_trim handles empty, valid ranges, clipping, and rejects bad ranges", t_parse_trim_table)
+check("trim_video cuts a 4 s test recording to 1..3 s and plays", t_trim_video_4s_cut_1_to_3)
+check("a failed trim moves the job to stuck/ and uploads nothing", t_failed_trim_moves_to_stuck_and_never_uploads)
+check("discard keeps files in discarded/ and mark_sent moves .untrimmed.mp4", t_discard_and_untrimmed_move_aside)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)

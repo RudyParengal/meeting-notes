@@ -85,6 +85,9 @@ class Outbox:
     def video(self, cid):
         return self.dir / f"{cid}.mp4"
 
+    def untrimmed(self, cid):
+        return self.dir / f"{cid}.untrimmed.mp4"
+
     def events(self, cid):
         return self.dir / f"{cid}.events.jsonl"
 
@@ -134,7 +137,7 @@ class Outbox:
         dest = self.dir / why
         dest.mkdir(exist_ok=True)
         cid = job["client_id"]
-        for p in (self.video(cid), self._meta(cid), self.events(cid)):
+        for p in (self.video(cid), self.untrimmed(cid), self._meta(cid), self.events(cid)):
             if p.exists():
                 os.replace(p, dest / p.name)
 
@@ -143,7 +146,7 @@ class Outbox:
         job.update(state="sent", share_url=share_url, sent=time.time())
         self.save(job)
         cid = job["client_id"]
-        for p in (self.video(cid), self._meta(cid), self.events(cid)):
+        for p in (self.video(cid), self.untrimmed(cid), self._meta(cid), self.events(cid)):
             if p.exists():
                 os.replace(p, self.sent / p.name)
 
@@ -1072,6 +1075,179 @@ def stop_events(w):
             log.exception("screen events did not stop cleanly")
 
 
+def parse_trim(start_text, end_text, seconds):
+    """Parse trim fields (m:ss); see screen_trim.parse_trim."""
+    import screen_trim
+    return screen_trim.parse_trim(start_text, end_text, seconds)
+
+
+def _review_dialog(root, tk, job, video_path, seconds, area, stop_asked, stdin_closed, review_cmds):
+    """Show the review window after Stop. Returns (action, title, trim_range).
+
+    Esc, closing the window, or pressing the hotkey again all mean Send so a
+    person who walks away still gets the link.
+    """
+    import screen_trim
+
+    res = {"val": ("send", job["title"], None)}
+    win = tk.Toplevel(root)
+    win.title("Review recording")
+    win.attributes("-topmost", True)
+    win.configure(bg="#1C1926", padx=18, pady=14)
+    secs_i = max(0, int(round(seconds)))
+    top = tk.Frame(win, bg="#1C1926")
+    top.pack(fill="x")
+    tk.Label(top, text="Review your recording", fg="#ECEAF3", bg="#1C1926",
+             font=("Segoe UI", 12, "bold")).pack(side="left")
+    tk.Label(top, text=f"{secs_i // 60}:{secs_i % 60:02d}", fg="#B9B5C6", bg="#1C1926",
+             font=("Segoe UI", 11)).pack(side="right")
+
+    tk.Label(win, text="Title", fg="#B9B5C6", bg="#1C1926", font=("Segoe UI", 9)).pack(anchor="w", pady=(10, 2))
+    title_e = tk.Entry(win, width=44, bg="#2D2A36", fg="#ECEAF3", insertbackground="#ECEAF3",
+                       relief="flat", font=("Segoe UI", 10))
+    title_e.insert(0, job["title"])
+    title_e.pack(fill="x", ipady=4)
+
+    cut = tk.Frame(win, bg="#1C1926")
+    cut.pack(fill="x", pady=(10, 0))
+    tk.Label(cut, text="Cut from start (m:ss)", fg="#B9B5C6", bg="#1C1926",
+             font=("Segoe UI", 9)).grid(row=0, column=0, sticky="w")
+    tk.Label(cut, text="Cut to (m:ss)", fg="#B9B5C6", bg="#1C1926",
+             font=("Segoe UI", 9)).grid(row=0, column=1, sticky="w", padx=(12, 0))
+    start_e = tk.Entry(cut, width=16, bg="#2D2A36", fg="#ECEAF3", insertbackground="#ECEAF3",
+                       relief="flat", font=("Segoe UI", 10))
+    start_e.grid(row=1, column=0, sticky="w", pady=(2, 0), ipady=3)
+    end_e = tk.Entry(cut, width=16, bg="#2D2A36", fg="#ECEAF3", insertbackground="#ECEAF3",
+                     relief="flat", font=("Segoe UI", 10))
+    end_e.grid(row=1, column=1, sticky="w", padx=(12, 0), pady=(2, 0), ipady=3)
+
+    err_lbl = tk.Label(win, text="", fg="#EF4444", bg="#1C1926", font=("Segoe UI", 9))
+    err_lbl.pack(anchor="w", pady=(6, 0))
+
+    def current_title():
+        return title_e.get().strip() or job["title"]
+
+    def do_send(e=None, strict=True):
+        try:
+            tr = screen_trim.parse_trim(start_e.get(), end_e.get(), seconds)
+        except ValueError as exc:
+            if strict:
+                err_lbl.config(text=str(exc))
+                return
+            tr = None
+        res["val"] = ("send", current_title(), tr)
+        win.destroy()
+
+    def do_discard():
+        res["val"] = ("discard", None, None)
+        win.destroy()
+
+    def do_play():
+        try:
+            os.startfile(str(video_path))
+        except OSError:
+            pass
+
+    row = tk.Frame(win, bg="#1C1926")
+    row.pack(fill="x", pady=(10, 0))
+    tk.Button(row, text="Play", command=do_play, relief="flat", bg="#2D2A36", fg="#ECEAF3",
+              activebackground="#3D3A47", font=("Segoe UI", 10), padx=12).pack(side="left")
+    tk.Button(row, text="Send", command=lambda: do_send(strict=True), relief="flat",
+              bg="#10B981", fg="#17141F", activebackground="#059669",
+              font=("Segoe UI", 10, "bold"), padx=14).pack(side="right")
+    tk.Button(row, text="Discard", command=do_discard, relief="flat", bg="#2D2A36", fg="#ECEAF3",
+              activebackground="#3D3A47", font=("Segoe UI", 10), padx=12).pack(side="right", padx=8)
+
+    win.bind("<Return>", lambda e: do_send(strict=True))
+    win.bind("<Escape>", lambda e: do_send(strict=False))
+    win.protocol("WM_DELETE_WINDOW", lambda: do_send(strict=False))
+
+    def poll():
+        if not win.winfo_exists():
+            return
+        if review_cmds:
+            cmd = review_cmds.pop(0)
+            if cmd == "discard":
+                do_discard()
+                return
+            if cmd == "send":
+                do_send(strict=False)
+                return
+            if cmd.startswith("trim "):
+                parts = cmd.split()
+                if len(parts) >= 3:
+                    start_e.delete(0, "end")
+                    start_e.insert(0, parts[1])
+                    end_e.delete(0, "end")
+                    end_e.insert(0, parts[2])
+                    do_send(strict=True)
+                    return
+        if stop_asked.is_set() or stdin_closed.is_set():
+            do_send(strict=False)
+            return
+        root.after(100, poll)
+
+    _centre(win, area)
+    win.focus_force()
+    root.after(100, poll)
+    root.wait_window(win)
+    return res["val"]
+
+
+def finalize_job(box, job, seconds, stopped_at, cap_info, action="send", title=None,
+                 trim_range=None, trim_video_fn=None, trim_events_fn=None):
+    """Apply Send/Trim/Discard to a finished recording. Returns (status, error_message)."""
+    cid = job["client_id"]
+    if action == "discard":
+        job.update(state="discarded", seconds=round(seconds, 1), stopped_at=stopped_at, **cap_info)
+        box.save(job)
+        box.move_aside(job, "discarded")
+        return "discarded", None
+
+    new_title = (title or "").strip() or job["title"]
+    if trim_range is not None:
+        start_s, end_s = trim_range
+        if trim_video_fn is None:
+            import screen_trim
+            trim_video_fn = screen_trim.trim_video
+        if trim_events_fn is None:
+            import screen_events
+            trim_events_fn = screen_events.trim_events
+        vid = box.video(cid)
+        untrimmed = box.untrimmed(cid)
+        ev = box.events(cid)
+        tmp_vid = vid.with_suffix(".trimmed.mp4")
+        tmp_ev = ev.with_suffix(".trimmed.jsonl")
+        try:
+            trim_video_fn(vid, tmp_vid, start_s, end_s, cap_info.get("encoder"))
+            if ev.exists():
+                trim_events_fn(ev, tmp_ev, int(round(start_s * 1000)), int(round(end_s * 1000)))
+            os.replace(vid, untrimmed)
+            os.replace(tmp_vid, vid)
+            if ev.exists() and tmp_ev.exists():
+                os.replace(tmp_ev, ev)
+        except Exception as e:
+            log.exception("screen trim failed for %s", cid)
+            for p in (tmp_vid, tmp_ev):
+                if p.exists():
+                    try:
+                        p.unlink()
+                    except OSError:
+                        pass
+            job.update(title=new_title, state="stuck", seconds=round(seconds, 1), stopped_at=stopped_at,
+                       trim=[round(start_s, 3), round(end_s, 3)], trim_error=str(e), **cap_info)
+            box.save(job)
+            box.move_aside(job, "stuck")
+            return "trim_failed", (f'Could not trim "{new_title}". '
+                                   f"The original recording is kept on this PC in {box.dir / 'stuck'}.")
+        seconds = end_s - start_s
+        job["trim"] = [round(start_s, 3), round(end_s, 3)]
+
+    job.update(title=new_title, state="ready", seconds=round(seconds, 1), stopped_at=stopped_at, **cap_info)
+    box.save(job)
+    return "ready", None
+
+
 def child_main(outbox_dir: str) -> int:
     """`Notewell.exe --screen-record`. Talks to the main copy by one JSON line per
     event on stdout; reads "stop" on stdin. Writes into the outbox only."""
@@ -1095,9 +1271,11 @@ def child_main(outbox_dir: str) -> int:
         out.flush()
 
     stop_asked = threading.Event()
+    stdin_closed = threading.Event()
     cmd_lock = threading.Lock()
     cmd_handler = {"fn": None}
     pending_cmds = []
+    review_cmds = []
 
     def read_stdin():
         for line in inp:
@@ -1107,12 +1285,16 @@ def child_main(outbox_dir: str) -> int:
             if cmd == "stop":
                 stop_asked.set()
                 continue
+            if cmd in ("send", "discard") or cmd.startswith("trim "):
+                review_cmds.append(cmd)
+                continue
             with cmd_lock:
                 fn = cmd_handler["fn"]
                 if fn is None:
                     pending_cmds.append(cmd)
                 else:
                     fn(cmd)
+        stdin_closed.set()
         stop_asked.set()                       # the main copy went away: stop too
     threading.Thread(target=read_stdin, daemon=True).start()
 
@@ -1254,10 +1436,6 @@ def child_main(outbox_dir: str) -> int:
             edge.destroy()
         except tk.TclError:
             pass
-    # Finish the file in the background so "Stopped" shows at once.
-    shown_until = time.monotonic() + 1.5
-    if effects:
-        show_effect(root, tk, mon, "stop", ms=1500)
     res = {}
 
     def finish():
@@ -1276,10 +1454,27 @@ def child_main(outbox_dir: str) -> int:
         raise res["error"]
     seconds = res["seconds"]
     log.info("stopped: %.1f s, %d frames, error %s", seconds, cap.frames, cap.error)
-    job.update(state="ready", seconds=round(seconds, 1), stopped_at=stopped_at, mic=cap.mic_ok,
-               encoder=cap.encoder, error=cap.error)
-    box.save(job)
-    say(event="done", client_id=job["client_id"], seconds=round(seconds, 1), stopped_at=stopped_at,
+    say(event="reviewing", client_id=job["client_id"], seconds=round(seconds, 1))
+    if test_source:
+        action, new_title, trim_range = "send", job["title"], None
+    else:
+        stop_asked.clear()
+        action, new_title, trim_range = _review_dialog(
+            root, tk, job, box.video(job["client_id"]), seconds, mon,
+            stop_asked, stdin_closed, review_cmds)
+    cap_info = {"mic": cap.mic_ok, "encoder": cap.encoder, "error": cap.error}
+    status, err_msg = finalize_job(box, job, seconds, stopped_at, cap_info,
+                                   action=action, title=new_title, trim_range=trim_range)
+    if status == "discarded":
+        say(event="discarded", client_id=job["client_id"])
+        return 0
+    if status == "trim_failed":
+        say(event="error", message=err_msg)
+        return 1
+    shown_until = time.monotonic() + 1.5
+    if effects:
+        show_effect(root, tk, mon, "stop", ms=1500)
+    say(event="done", client_id=job["client_id"], seconds=job["seconds"], stopped_at=stopped_at,
         mic=cap.mic_ok, error=cap.error, size=box.video(job["client_id"]).stat().st_size)
     while effects and time.monotonic() < shown_until:     # let "Stopped" finish showing
         root.update()
@@ -1395,6 +1590,11 @@ class ScreenService:
                          ev.get("screen"), ev.get("mic"), ev.get("encoder"))
                 if not ev.get("mic"):
                     self.notify("Screen recording", "Recording without sound: the microphone is not available.")
+            elif kind == "reviewing":
+                self.started = None
+            elif kind == "discarded":
+                self.started = None
+                log.info("screen recording discarded: %s", ev.get("client_id"))
             elif kind == "done":
                 self.started = None
                 log.info("screen recording stopped: %.0f s, %.1f MB", ev.get("seconds", 0), ev.get("size", 0) / 1e6)
