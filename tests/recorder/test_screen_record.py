@@ -434,7 +434,22 @@ def t_records_picture_and_sound():
     # frames on one timestamp).
     assert n >= 60, f"only {n} frames in 5 s"
     left = sorted(p.name for p in (home / "screen" / "outbox").iterdir())
-    assert left == sorted([f"{jobs[0]['client_id']}.mp4", f"{jobs[0]['client_id']}.json"]), left
+    cid = jobs[0]["client_id"]
+    assert left == sorted([f"{cid}.mp4", f"{cid}.json", f"{cid}.events.jsonl"]), left
+
+
+def t_start_and_stop_events_never_raise():
+    class BrokenBox:
+        def events(self, cid):
+            raise RuntimeError("disk fault")
+
+    class BrokenWatcher:
+        def stop(self):
+            raise RuntimeError("stop fault")
+
+    assert sr.start_events(BrokenBox(), {"client_id": "c1"}, object(), (0, 0, 100, 100), True) is None
+    sr.stop_events(None)
+    sr.stop_events(BrokenWatcher())
 
 
 def t_crash_keeps_what_was_recorded():
@@ -449,6 +464,7 @@ def t_crash_keeps_what_was_recorded():
 
 check("5 s of recording: picture and sound, 15 frames a second, only 2 files", t_records_picture_and_sound)
 check("killed mid-recording: what was recorded still plays", t_crash_keeps_what_was_recorded)
+check("start_events and stop_events never raise when something breaks", t_start_and_stop_events_never_raise)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)

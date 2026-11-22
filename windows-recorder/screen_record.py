@@ -675,6 +675,30 @@ def flash_main(kind, area=None) -> int:
     return 0
 
 
+def start_events(box, job, cap, area, test_mode):
+    """Never raises: if the events watcher cannot start, the video still records."""
+    try:
+        import screen_events
+        w = screen_events.Watcher(
+            box.events(job["client_id"]), area, cap.video_ms, (cap.v.width, cap.v.height),
+            is_private=lambda exe, title: bool(never_record_reasons([(exe, title)])),
+            probe=None if test_mode else screen_events.WinProbe(os.getpid()),
+            own_pid=os.getpid())
+        w.start()
+        return w
+    except Exception:
+        log.exception("screen events did not start; the video records without them")
+        return None
+
+
+def stop_events(w):
+    if w is not None:
+        try:
+            w.stop()
+        except Exception:
+            log.exception("screen events did not stop cleanly")
+
+
 def child_main(outbox_dir: str) -> int:
     """`Notewell.exe --screen-record`. Talks to the main copy by one JSON line per
     event on stdout; reads "stop" on stdin. Writes into the outbox only."""
@@ -743,6 +767,7 @@ def child_main(outbox_dir: str) -> int:
         box.move_aside(job, "failed")
         say(event="error", message=f"Screen recording could not start: {e}")
         return 1
+    watcher = start_events(box, job, cap, area, bool(test_source))
     say(event="started", client_id=job["client_id"], screen=idx + 1, mic=cap.mic_ok, encoder=cap.encoder)
     effects = not test_source                  # tests never flash the real screen
     if effects:
@@ -789,6 +814,8 @@ def child_main(outbox_dir: str) -> int:
             res["seconds"] = cap.stop()
         except BaseException as e:
             res["error"] = e
+        finally:
+            stop_events(watcher)
     th = threading.Thread(target=finish, daemon=True)
     th.start()
     while th.is_alive():
