@@ -180,9 +180,10 @@ class _Resp:
 class FakeServer:
     """The live server's rules (backend recordings.py) in memory."""
 
-    def __init__(self, piece=1000, received=0, fail_put_after=None, not_video=False, ready=False):
+    def __init__(self, piece=1000, received=0, fail_put_after=None, not_video=False, ready=False, events_code=200):
         self.piece, self.data, self.puts = piece, b"", 0
         self.received, self.fail_after, self.not_video, self.ready = received, fail_put_after, not_video, ready
+        self.events_code, self.events_body, self.events_headers = events_code, None, None
 
     def rec(self):
         return {"id": "r1", "piece_max": self.piece, "received": self.received,
@@ -194,6 +195,10 @@ class FakeServer:
         return _Resp(201, self.rec())
 
     def put(self, url, params=None, data=None, headers=None, timeout=None):
+        if url.endswith("/events"):
+            self.events_body, self.events_headers = data, headers
+            n = max(0, len((data or b"").splitlines()) - 2)
+            return _Resp(self.events_code, {"events_status": "ready", "events_count": n})
         if self.fail_after is not None and self.puts >= self.fail_after:
             raise ConnectionError("offline")
         self.puts += 1
@@ -321,6 +326,69 @@ def t_upload_waiting_moves_stuck_aside():
     assert len(notes) == 1 and "Stuck clip" in notes[0][1], notes
 
 
+def _events_file():
+    p = tmp() / "c.events.jsonl"
+    p.write_bytes(b'{"v":1}\n{"t":10,"k":"private"}\n{"t":20,"k":"end","lines":2,"cut":false}\n')
+    return p
+
+
+def t_upload_sets_server_id():
+    p, srv = _video_file(), FakeServer()
+    job = {"title": "t", "client_id": "c"}
+    sr.upload(job, p, srv, "https://x")
+    assert job.get("server_id") == "r1", job
+
+
+def t_upload_events_sent():
+    ep, srv = _events_file(), FakeServer()
+    res = sr.upload_events({"server_id": "r1"}, ep, srv, "https://x")
+    assert res == "sent", res
+    assert srv.events_body == ep.read_bytes()
+    assert srv.events_headers == {"Content-Type": "application/x-ndjson"}, srv.events_headers
+
+
+def t_upload_events_old_server():
+    ep, srv = _events_file(), FakeServer(events_code=404)
+    assert sr.upload_events({"server_id": "r1"}, ep, srv, "https://x") == "old server"
+
+
+def t_upload_events_server_down():
+    ep, srv = _events_file(), FakeServer()
+    real_put = srv.put
+    def put_err(url, **kw):
+        if url.endswith("/events"):
+            raise ConnectionError("offline")
+        return real_put(url, **kw)
+    srv.put = put_err
+    assert sr.upload_events({"server_id": "r1"}, ep, srv, "https://x") == "failed"
+
+
+def t_upload_events_missing_file():
+    srv = FakeServer()
+    res = sr.upload_events({"server_id": "r1"}, tmp() / "missing.events.jsonl", srv, "https://x")
+    assert res == "none" and srv.events_body is None
+
+
+def t_upload_waiting_copies_link_when_events_fail():
+    srv = FakeServer(events_code=500)
+    copied, real = [], sr.set_clipboard_text
+    sr.set_clipboard_text = lambda text: (copied.append(text), True)[1]
+    try:
+        home = tmp()
+        svc = sr.ScreenService(home, ["unused"], get_link=lambda: _Link(srv), notify=lambda t, m: None)
+        job = svc.box.new_job("Events fail")
+        svc.box.video(job["client_id"]).write_bytes(_video_file().read_bytes())
+        svc.box.events(job["client_id"]).write_bytes(_events_file().read_bytes())
+        job["state"] = "ready"
+        svc.box.save(job)
+        svc.upload_waiting()
+    finally:
+        sr.set_clipboard_text = real
+    assert len(copied) == 1 and copied[0].endswith("/s/tok"), copied
+    meta = json.loads((svc.box.sent / f"{job['client_id']}.json").read_text(encoding="utf-8"))
+    assert meta.get("events_upload") == "failed", meta
+
+
 check("a video goes up in pieces and comes back as a link", t_upload_in_pieces)
 check("offline half-way: the next try carries on, nothing sent twice", t_upload_resumes_after_going_offline)
 check("if the server is somewhere else, the upload goes there", t_upload_follows_server_offset)
@@ -330,6 +398,12 @@ check("a piece answer with status failed stops with NotVideo", t_upload_piece_sa
 check("server claiming more bytes than the file stops with UploadStuck", t_upload_server_claims_more_than_file)
 check("repeated 409 with the same offset stops with UploadStuck", t_upload_409_same_offset_forever)
 check("upload_waiting moves a stuck job aside and notifies once", t_upload_waiting_moves_stuck_aside)
+check("upload sets job['server_id']", t_upload_sets_server_id)
+check("events file is uploaded with application/x-ndjson", t_upload_events_sent)
+check("old server returning 404 on events gives 'old server'", t_upload_events_old_server)
+check("connection error on events returns 'failed'", t_upload_events_server_down)
+check("missing events file returns 'none' without calling /events", t_upload_events_missing_file)
+check("upload_waiting still copies the link when events fail", t_upload_waiting_copies_link_when_events_fail)
 
 # ---------------------------------------------------------------------- hotkey
 print("\nHotkey")

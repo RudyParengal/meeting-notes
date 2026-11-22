@@ -206,7 +206,41 @@ def upload(job, path: Path, http, base_url: str):
             if stuck >= STUCK_AFTER:
                 raise UploadStuck(rid)
             off = new
+    job["server_id"] = rid
     return rec["share_url"]
+
+
+EVENTS_UPLOAD_MAX = 5 * 1024 * 1024
+
+
+def upload_events(job, path: Path, http, base_url: str) -> str:
+    """Send the events file once the video is in. Never raises: the link matters more.
+    Returns "sent", "none", "old server" or "failed" for the log and the job file."""
+    rid = job.get("server_id")
+    if not rid or not path or not path.exists():
+        return "none"
+    try:
+        size = path.stat().st_size
+    except OSError as e:
+        log.warning("screen events for %s unreadable: %s", rid, type(e).__name__)
+        return "failed"
+    if size == 0:
+        return "none"
+    if size > EVENTS_UPLOAD_MAX:
+        log.warning("screen events for %s over 5 MB (%d bytes), skipped", rid, size)
+        return "failed"
+    try:
+        r = http.put(f"{base_url}/recordings/{rid}/events", data=path.read_bytes(),
+                     headers={"Content-Type": "application/x-ndjson"}, timeout=20)
+    except Exception as e:
+        log.warning("screen events upload for %s failed: %s", rid, type(e).__name__)
+        return "failed"
+    if r.status_code == 200:
+        return "sent"
+    if r.status_code in (404, 405):
+        return "old server"
+    log.warning("screen events upload for %s failed: status %d", rid, r.status_code)
+    return "failed"
 
 
 # --------------------------------------------------------- Windows helpers ---
@@ -1032,6 +1066,7 @@ class ScreenService:
                 return
             finally:
                 self.uploading = None
+            job["events_upload"] = upload_events(job, self.box.events(job["client_id"]), link.http, link.url)
             copied = set_clipboard_text(url)
             self.last_link = url
             took = time.time() - job["stopped_at"] if job.get("stopped_at") else None
