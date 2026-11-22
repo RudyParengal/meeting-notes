@@ -259,11 +259,77 @@ def t_upload_already_done():
     assert srv.puts == 0
 
 
+def t_upload_piece_says_failed():
+    p, srv = _video_file(), FakeServer()
+    def put_fail(url, params=None, data=None, headers=None, timeout=None):
+        srv.puts += 1
+        return _Resp(200, {**srv.rec(), "status": "failed"})
+    srv.put = put_fail
+    try:
+        sr.upload({"title": "t", "client_id": "c"}, p, srv, "https://x")
+        raise AssertionError("expected NotVideo")
+    except sr.NotVideo:
+        pass
+    assert srv.puts <= 2, srv.puts
+
+
+def t_upload_server_claims_more_than_file():
+    p, srv = _video_file(3500), FakeServer(received=5000)
+    def put_same(url, params=None, data=None, headers=None, timeout=None):
+        srv.puts += 1
+        return _Resp(200, {**srv.rec(), "received": 5000, "status": "uploading"})
+    srv.put = put_same
+    try:
+        sr.upload({"title": "t", "client_id": "c"}, p, srv, "https://x")
+        raise AssertionError("expected UploadStuck")
+    except sr.UploadStuck:
+        pass
+    assert srv.puts <= 5, srv.puts
+
+
+def t_upload_409_same_offset_forever():
+    p, srv = _video_file(), FakeServer()
+    def put_409(url, params=None, data=None, headers=None, timeout=None):
+        srv.puts += 1
+        return _Resp(409, {"received": 0})
+    srv.put = put_409
+    try:
+        sr.upload({"title": "t", "client_id": "c"}, p, srv, "https://x")
+        raise AssertionError("expected UploadStuck")
+    except sr.UploadStuck:
+        pass
+    assert srv.puts <= 5, srv.puts
+
+
+class _Link:
+    def __init__(self, srv):
+        self.http, self.url = srv, "https://x"
+
+
+def t_upload_waiting_moves_stuck_aside():
+    srv = FakeServer()
+    srv.put = lambda url, params=None, data=None, headers=None, timeout=None: _Resp(409, {"received": 0})
+    notes, home = [], tmp()
+    svc = sr.ScreenService(home, ["unused"], get_link=lambda: _Link(srv),
+                           notify=lambda t, m: notes.append((t, m)))
+    job = svc.box.new_job("Stuck clip")
+    svc.box.video(job["client_id"]).write_bytes(_video_file().read_bytes())
+    job["state"] = "ready"
+    svc.box.save(job)
+    svc.upload_waiting()
+    assert (svc.box.dir / "stuck" / f"{job['client_id']}.json").exists()
+    assert len(notes) == 1 and "Stuck clip" in notes[0][1], notes
+
+
 check("a video goes up in pieces and comes back as a link", t_upload_in_pieces)
 check("offline half-way: the next try carries on, nothing sent twice", t_upload_resumes_after_going_offline)
 check("if the server is somewhere else, the upload goes there", t_upload_follows_server_offset)
 check("a file the server cannot read stops, not retried forever", t_upload_not_video)
 check("already on the server: just the link, nothing re-sent", t_upload_already_done)
+check("a piece answer with status failed stops with NotVideo", t_upload_piece_says_failed)
+check("server claiming more bytes than the file stops with UploadStuck", t_upload_server_claims_more_than_file)
+check("repeated 409 with the same offset stops with UploadStuck", t_upload_409_same_offset_forever)
+check("upload_waiting moves a stuck job aside and notifies once", t_upload_waiting_moves_stuck_aside)
 
 # ---------------------------------------------------------------------- hotkey
 print("\nHotkey")
@@ -291,11 +357,6 @@ check("the screen key is Ctrl+Shift+R out of the box", t_default_hotkey_is_ctrl_
 
 # ------------------------------------------------------------- screen flashes
 print("\nScreen flashes")
-
-
-class _Link:
-    def __init__(self, srv):
-        self.http, self.url = srv, "https://x"
 
 
 def _service(get_link):

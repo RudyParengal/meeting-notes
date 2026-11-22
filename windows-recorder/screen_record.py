@@ -163,9 +163,16 @@ class NotVideo(Exception):
     """The server could not read the file as video. Retrying will not help."""
 
 
+class UploadStuck(Exception):
+    """The server keeps answering without taking any more of the file. Retrying will not help."""
+
+
+STUCK_AFTER = 3          # answers in a row with no progress before giving up
+
+
 def upload(job, path: Path, http, base_url: str):
     """Send one recording in pieces, carrying on from wherever the server got to.
-    Returns the share link. Raises on a network fault (try again later) or NotVideo."""
+    Returns the share link. Raises on a network fault (try again later), NotVideo or UploadStuck."""
     size = path.stat().st_size
     r = http.post(f"{base_url}/recordings", timeout=30, json={
         "title": job["title"], "size": size, "content_type": "video/mp4", "client_id": job["client_id"]})
@@ -174,20 +181,31 @@ def upload(job, path: Path, http, base_url: str):
     rid, piece, off = rec["id"], rec.get("piece_max", 8 * 1024 * 1024), rec.get("received", 0)
     if rec.get("status") == "failed":
         raise NotVideo(rid)
+    stuck = 0
     with open(path, "rb") as f:
         while rec.get("status") != "ready":
+            if rec.get("status") == "failed":
+                raise NotVideo(rid)
             f.seek(off)
             data = f.read(piece)
             r = http.put(f"{base_url}/recordings/{rid}/data", params={"offset": off}, data=data,
                          headers={"Content-Type": "application/octet-stream"}, timeout=300)
             if r.status_code == 409:                     # the server is somewhere else: go there
-                off = r.json()["received"]
-                continue
-            if r.status_code == 422:
+                new = r.json()["received"]
+            elif r.status_code == 422:
                 raise NotVideo(rid)
-            r.raise_for_status()
-            rec = r.json()
-            off = rec["received"]
+            else:
+                r.raise_for_status()
+                rec = r.json()
+                if rec.get("status") == "failed":
+                    raise NotVideo(rid)
+                if rec.get("status") == "ready":
+                    break
+                new = rec["received"]
+            stuck = stuck + 1 if new == off else 0
+            if stuck >= STUCK_AFTER:
+                raise UploadStuck(rid)
+            off = new
     return rec["share_url"]
 
 
@@ -1002,6 +1020,11 @@ class ScreenService:
                 self.box.move_aside(job, "unreadable")
                 self.notify("Screen recording", f"The server could not read “{job['title']}”. "
                             f"It is kept on this PC in {self.box.dir / 'unreadable'}.")
+                continue
+            except UploadStuck:
+                self.box.move_aside(job, "stuck")
+                self.notify("Screen recording", f"“{job['title']}” could not finish uploading. "
+                            f"It is kept on this PC in {self.box.dir / 'stuck'}.")
                 continue
             except Exception as e:                      # offline, server down: next pass
                 log.info("screen upload of %s waits: %s", job["client_id"], e)
