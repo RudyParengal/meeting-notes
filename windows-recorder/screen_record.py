@@ -85,6 +85,9 @@ class Outbox:
     def video(self, cid):
         return self.dir / f"{cid}.mp4"
 
+    def events(self, cid):
+        return self.dir / f"{cid}.events.jsonl"
+
     def _meta(self, cid):
         return self.dir / f"{cid}.json"
 
@@ -130,7 +133,8 @@ class Outbox:
         """Out of the queue but kept: outbox/<why>/."""
         dest = self.dir / why
         dest.mkdir(exist_ok=True)
-        for p in (self.video(job["client_id"]), self._meta(job["client_id"])):
+        cid = job["client_id"]
+        for p in (self.video(cid), self._meta(cid), self.events(cid)):
             if p.exists():
                 os.replace(p, dest / p.name)
 
@@ -138,7 +142,8 @@ class Outbox:
         self.sent.mkdir(exist_ok=True)
         job.update(state="sent", share_url=share_url, sent=time.time())
         self.save(job)
-        for p in (self.video(job["client_id"]), self._meta(job["client_id"])):
+        cid = job["client_id"]
+        for p in (self.video(cid), self._meta(cid), self.events(cid)):
             if p.exists():
                 os.replace(p, self.sent / p.name)
 

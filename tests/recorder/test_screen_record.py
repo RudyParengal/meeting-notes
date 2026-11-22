@@ -105,11 +105,33 @@ def t_mark_sent_moves_both_files():
     box = sr.Outbox(tmp())
     j = box.new_job("a")
     box.video(j["client_id"]).write_bytes(b"x")
+    box.events(j["client_id"]).write_text('{"v":1}\n', encoding="utf-8")
     box.mark_sent(j, "https://example.test/s/abc")
     assert not list(box.dir.glob("*.*")), list(box.dir.iterdir())
     meta = json.loads((box.sent / f"{j['client_id']}.json").read_text(encoding="utf-8"))
     assert meta["state"] == "sent" and meta["share_url"].endswith("/abc"), meta
     assert (box.sent / f"{j['client_id']}.mp4").exists()
+    assert (box.sent / f"{j['client_id']}.events.jsonl").exists()
+
+
+def t_move_aside_moves_all_three_files():
+    box = sr.Outbox(tmp())
+    j = box.new_job("a")
+    box.video(j["client_id"]).write_bytes(b"x")
+    box.events(j["client_id"]).write_text('{"v":1}\n', encoding="utf-8")
+    box.move_aside(j, "failed")
+    assert not list(box.dir.glob("*.*")), list(box.dir.iterdir())
+    dest = box.dir / "failed"
+    for suffix in (".mp4", ".json", ".events.jsonl"):
+        assert (dest / f"{j['client_id']}{suffix}").exists(), suffix
+
+
+def t_jobs_ignores_events_file():
+    box = sr.Outbox(tmp())
+    j = box.new_job("a")
+    box.events(j["client_id"]).write_text('{"v":1}\n{"t":0,"k":"private"}\n', encoding="utf-8")
+    jobs = box.jobs()
+    assert len(jobs) == 1 and jobs[0]["client_id"] == j["client_id"], jobs
 
 
 def t_prune_sent_only_old():
@@ -133,7 +155,9 @@ def t_no_stray_files():
 
 
 check("after a crash: a started recording is finished, an empty one moved aside", t_recover_finishes_or_moves_aside)
-check("once uploaded, the video and its note move to sent/", t_mark_sent_moves_both_files)
+check("once uploaded, all three files move to sent/", t_mark_sent_moves_both_files)
+check("move_aside moves all three files", t_move_aside_moves_all_three_files)
+check("jobs() ignores the events file", t_jobs_ignores_events_file)
 check("sent/ keeps a week, then tidies", t_prune_sent_only_old)
 check("saving leaves no temporary file behind", t_no_stray_files)
 
