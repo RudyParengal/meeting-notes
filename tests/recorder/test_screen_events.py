@@ -5,8 +5,11 @@
 Uses made-up values only; never reads real windows on this laptop.
 """
 import json
+import os
+import re
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -205,6 +208,155 @@ def t_writer_byte_cap():
 
 check("Writer stops at line cap, sets cut, and still writes end line", t_writer_line_cap_and_end)
 check("Writer stops at byte cap, stays cut, and still writes end line", t_writer_byte_cap)
+
+# --------------------------------------------------------------------- watcher
+print("\nWatcher")
+
+
+class FakeProbe:
+    def __init__(self, fg=(101, "notepad.exe", "notes.txt"), cur=(200, 300), btns=(False, False), li=1000, at=None):
+        self.fg, self.cur, self.btns, self.li, self.at = fg, cur, btns, li, at
+
+    def foreground(self):
+        return self.fg
+
+    def cursor(self):
+        return self.cur
+
+    def buttons(self):
+        return self.btns
+
+    def last_input(self):
+        return self.li
+
+    def window_at(self, x, y):
+        return self.fg if self.at is None else self.at
+
+
+def _is_priv(exe, title):
+    return "keepass" in (exe or "").lower() or "keepass" in (title or "").lower()
+
+
+def t_watcher_scripted_session():
+    p = tmp() / "sess.events.jsonl"
+    now = {"t": 0}
+    probe = FakeProbe(fg=(101, "notepad.exe", "notes-example.txt"), cur=(250, 260), btns=(False, False), li=100)
+    old_ver = os.environ.get("NOTEWELL_VERSION")
+    os.environ["NOTEWELL_VERSION"] = "2.7.4"
+    try:
+        w = se.Watcher(p, (100, 100, 1280, 720), lambda: now["t"], (1280, 720), _is_priv, probe=probe, own_pid=999)
+        w.step(0, windows=True)
+        # Click inside recorded monitor: coordinates relative to area (100, 100) -> (150, 160).
+        probe.btns, probe.li = (True, False), 101
+        w.step(100, windows=False)
+        # Releasing button changes last_input: must not count as typing.
+        probe.btns, probe.li = (False, False), 102
+        w.step(130, windows=False)
+        # Typing burst: cursor still, no button down, last_input advances.
+        probe.li = 103
+        w.step(300, windows=False)
+        probe.li = 104
+        w.step(600, windows=False)
+        # Click on a private window while front window is still notepad: dropped!
+        probe.at = (202, "keepass.exe", "Vault")
+        probe.btns, probe.li = (True, False), 105
+        w.step(2200, windows=False)   # typing burst from 300..600 is due here (2200-600 >= 1500)
+        probe.btns, probe.li = (False, False), 106
+        w.step(2230, windows=False)
+        # Now private window becomes front; typing in it is dropped.
+        probe.fg = (202, "keepass.exe", "Vault")
+        w.step(2300, windows=True)
+        probe.li = 107
+        w.step(2400, windows=False)
+        # Back to normal window, right click inside, then stop.
+        probe.fg = probe.at = (303, "chrome.exe", "Example Domain")
+        w.step(4000, windows=True)
+        probe.btns, probe.li = (False, True), 108
+        w.step(4100, windows=False)
+        now["t"] = 4500
+        w.stop()
+    finally:
+        if old_ver is None:
+            os.environ.pop("NOTEWELL_VERSION", None)
+        else:
+            os.environ["NOTEWELL_VERSION"] = old_ver
+
+    rows = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines()]
+    hdr = rows[0]
+    assert set(hdr.keys()) == {"v", "started_utc", "os", "app", "screen", "video"}, hdr
+    assert hdr["v"] == 1 and hdr["app"] == "2.7.4"
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", hdr["started_utc"]), hdr["started_utc"]
+    assert hdr["screen"] == {"x": 100, "y": 100, "w": 1280, "h": 720} and hdr["video"] == [1280, 720]
+    expected = [
+        {"t": 0, "k": "window", "app": "notepad.exe", "title": "notes-example.txt"},
+        {"t": 100, "k": "click", "b": "left", "x": 150, "y": 160},
+        {"t": 300, "k": "typing", "ms": 300},
+        {"t": 2300, "k": "private"},
+        {"t": 4000, "k": "window", "app": "chrome.exe", "title": "Example Domain"},
+        {"t": 4100, "k": "click", "b": "right", "x": 150, "y": 160},
+        {"t": 4500, "k": "end", "lines": 7, "cut": False},
+    ]
+    assert rows[1:] == expected, rows[1:]
+
+
+def t_watcher_broken_probe_still_writes_end():
+    class BrokenProbe:
+        def foreground(self):
+            raise RuntimeError("boom")
+
+        def cursor(self):
+            raise RuntimeError("boom")
+
+        def buttons(self):
+            raise RuntimeError("boom")
+
+        def last_input(self):
+            raise RuntimeError("boom")
+
+        def window_at(self, x, y):
+            raise RuntimeError("boom")
+
+    p = tmp() / "broken.events.jsonl"
+    old_poll = se.POLL_S
+    se.POLL_S = 0.002
+    try:
+        w = se.Watcher(p, (0, 0, 800, 600), lambda: 500, (800, 600), _is_priv, probe=BrokenProbe(), own_pid=999)
+        w.start()
+        time.sleep(0.15)
+        w.stop()
+        w.stop()  # safe to call twice
+    finally:
+        se.POLL_S = old_poll
+    rows = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 2 and rows[0]["v"] == 1 and rows[1] == {"t": 500, "k": "end", "lines": 1, "cut": False}, rows
+
+
+def t_watcher_probe_none_and_threaded_fake():
+    p1 = tmp() / "none.events.jsonl"
+    w1 = se.Watcher(p1, (0, 0, 640, 480), lambda: 250, (640, 480), _is_priv, probe=None, own_pid=999)
+    w1.start()
+    assert w1._thread is None
+    w1.stop()
+    r1 = [json.loads(ln) for ln in p1.read_text(encoding="utf-8").splitlines()]
+    assert len(r1) == 2 and r1[-1] == {"t": 250, "k": "end", "lines": 1, "cut": False}, r1
+
+    p2 = tmp() / "threaded.events.jsonl"
+    t0 = time.monotonic()
+    probe = FakeProbe(fg=(101, "notepad.exe", "example.txt"), cur=(100, 100))
+    w2 = se.Watcher(p2, (0, 0, 800, 600), lambda: int((time.monotonic() - t0) * 1000), (800, 600),
+                    _is_priv, probe=probe, own_pid=999)
+    w2.start()
+    time.sleep(0.08)
+    w2.stop()
+    assert time.monotonic() - t0 < 1.0
+    r2 = [json.loads(ln) for ln in p2.read_text(encoding="utf-8").splitlines()]
+    assert r2[0]["v"] == 1 and r2[-1]["k"] == "end"
+    assert any(e.get("k") == "window" and e.get("title") == "example.txt" for e in r2), r2
+
+
+check("scripted Watcher session records expected header and events in order", t_watcher_scripted_session)
+check("a probe that always raises still lets stop() write the end line", t_watcher_broken_probe_still_writes_end)
+check("probe=None writes header+end only; real Watcher thread starts and stops within 1 s", t_watcher_probe_none_and_threaded_fake)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)
