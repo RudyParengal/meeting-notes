@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.7.5: Screen recordings that show what happened (22 Nov 2026)
+
+### Added
+- **A screen recording now notes what you did, with times.** Which window was open, where you clicked and, with the Chrome helper, which page, console errors and failed or slow web requests. The website turns this into a summary and steps to reproduce.
+- **Recorder controls:** pause and resume, mute the microphone, record a whole screen, one window or a dragged area, draw marks that fade, hide part of the screen, take a screenshot with a hotkey, an optional camera bubble and an optional "keep the last 2 minutes" buffer.
+- **Check before it uploads:** review, rename, trim or discard a recording first.
+- **Chrome helper** (in the `browser-extension` folder, loaded by hand): sends page, console and network lines to the recorder only while a recording runs. It never reads cookies, form fields or request contents.
+
+### Fixed
+- **An upload that makes no progress now stops** instead of retrying for ever.
+
 ## 2.7.4: Sharper text in the app window (22 Nov 2026)
 
 ### Fixed
