@@ -571,6 +571,12 @@ def t_records_picture_and_sound():
     left = sorted(p.name for p in (home / "screen" / "outbox").iterdir())
     cid = jobs[0]["client_id"]
     assert left == sorted([f"{cid}.mp4", f"{cid}.json", f"{cid}.events.jsonl"]), left
+    el = box.events(cid).read_text(encoding="utf-8").splitlines()
+    assert len(el) == 2, el
+    hdr, end = json.loads(el[0]), json.loads(el[1])
+    assert set(hdr.keys()) == {"v", "started_utc", "os", "app", "screen", "video"}, hdr
+    assert hdr["v"] == 1 and hdr["video"] == [1280, 720] and set(hdr["screen"].keys()) == {"x", "y", "w", "h"}, hdr
+    assert end.get("k") == "end" and end.get("lines") == 1 and end.get("cut") is False and type(end.get("t")) is int, end
 
 
 def t_start_and_stop_events_never_raise():
@@ -595,9 +601,14 @@ def t_crash_keeps_what_was_recorded():
     assert len(jobs) == 1 and jobs[0].get("recovered"), box.jobs()
     kinds, n = _frames(box.video(jobs[0]["client_id"]))
     assert "video" in kinds and n >= 30, (kinds, n)
+    ep = box.events(jobs[0]["client_id"])
+    assert ep.exists()
+    rows = [json.loads(ln) for ln in ep.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert rows and rows[0].get("v") == 1 and set(rows[0].keys()) == {"v", "started_utc", "os", "app", "screen", "video"}, rows
+    assert all(r.get("k") != "end" for r in rows), rows
 
 
-check("5 s of recording: picture and sound, 15 frames a second, only 2 files", t_records_picture_and_sound)
+check("5 s of recording: picture and sound, 15 frames a second, 3 files", t_records_picture_and_sound)
 check("killed mid-recording: what was recorded still plays", t_crash_keeps_what_was_recorded)
 check("start_events and stop_events never raise when something breaks", t_start_and_stop_events_never_raise)
 
