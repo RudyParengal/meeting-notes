@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "Notewell recorder helper",
+  "version": "0.1.0",
+  "description": "Sends the active page address, console errors, and failed or slow web requests to Notewell while a screen recording runs.",
+  "incognito": "not_allowed",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAssBfUFyVt74pzVGNlgE/4J50Xs6muaU9V3Dvffm70ut8HvPOAeoAJgsK+WKDVekEEgj49lND+opRmZ1PKHDJ7OsxZthXe/TfjWAqS5566lGHmJSoCC+Esktg2StzNHlGn+wdNAhcX4asal2CLQ+bT8j52j/s4yt4PuWq5nkYibDVFeMfMjhhLnjzIbPCcoDtH2Huaql9Bags+AktdVZhgVzPCi1A8LxfJAnWOmIuV+tDrEQ6MehA78mrW+VcBm1lOhcKQcZYU9L9J30Or6BUQ9qipf/Pkg5cawN7TSnK2fLSSSV1HNijiG4YMwkbrrHtIvRdW0GF7CfupidJWjpw6wIDAQAB",
+  "permissions": [
+    "tabs",
+    "webRequest",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false,
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "console-hook.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false,
+      "world": "MAIN"
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  }
+}

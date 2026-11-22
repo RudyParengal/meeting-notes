@@ -1,0 +1,25 @@
+# Format: <input>\t<expected>
+# Empty expected (nothing after the tab) means clean_url must return "".
+https://example.com/search?q=hello&page=2	https://example.com/search?q=*&page=*
+https://example.com/api?id=42	https://example.com/api?id=*
+https://example.com/docs/intro	https://example.com/docs/intro
+https://example.com	https://example.com/
+https://example.com/	https://example.com/
+https://example.com/search?q=secret#section-2	https://example.com/search?q=*
+https://example.com/page#top	https://example.com/page
+https://example.com:8443/v1/items?token=abc&debug=true	https://example.com:8443/v1/items?token=*&debug=*
+https://testuser:testpass@example.com/account?key=999	https://example.com/account?key=*
+http://example.org/list?tag=one&tag=two	http://example.org/list?tag=*&tag=*
+https://example.com/run?verbose&dry_run=	https://example.com/run?verbose=*&dry_run=*
+https://example.com/empty?	https://example.com/empty
+https://example.com/mixed?=secret&ok=1	https://example.com/mixed?ok=*
+https://example.com/onlyempty?=secret	https://example.com/onlyempty
+http://localhost:3000/app?session=xyz	http://localhost:3000/app?session=*
+chrome://extensions/	
+chrome-extension://abcdefghijklmnopabcdefghijklmnop/options.html	
+file:///tmp/example-page.html	
+data:text/html,<h1>hello</h1>	
+about:blank	
+javascript:void(0)	
+not a valid url	
+	
