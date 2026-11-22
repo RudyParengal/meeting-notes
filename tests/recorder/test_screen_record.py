@@ -708,7 +708,38 @@ check("killed mid-recording: what was recorded still plays", t_crash_keeps_what_
 check("start_events and stop_events never raise when something breaks", t_start_and_stop_events_never_raise)
 check("Capture.video_ms freezes during pause and resumes from the same value", t_video_ms_freezes_on_pause)
 check("recording with a 2 s pause leaves the pause out and keeps pts rising", t_record_with_pause)
+def t_mute_silences_middle_second():
+    import av
+    import numpy as np
+    home, events = _record_script([(1.0, "mute"), (1.0, "unmute"), (1.0, "stop")])
+    done = [e for e in events if e.get("event") == "done"]
+    assert done and not done[0]["error"], events
+    box = sr.Outbox(home / "screen")
+    jobs = box.waiting()
+    assert len(jobs) == 1, jobs
+    # Job file gains no mute fields
+    assert not any("mute" in k.lower() for k in jobs[0].keys()), jobs[0]
+    segs = [[], [], []]  # [0.0..0.8], [1.2..1.8], [2.2..end]
+    with av.open(str(box.video(jobs[0]["client_id"]))) as c:
+        as_ = c.streams.audio[0]
+        tb = float(as_.time_base)
+        for frame in c.decode(audio=0):
+            t = frame.pts * tb if frame.pts is not None else 0.0
+            arr = frame.to_ndarray().astype(np.float32).ravel()
+            if 0.0 <= t <= 0.8:
+                segs[0].append(arr)
+            elif 1.2 <= t <= 1.8:
+                segs[1].append(arr)
+            elif t >= 2.2:
+                segs[2].append(arr)
+    rms = [float(np.sqrt(np.mean(np.concatenate(s) ** 2))) for s in segs]
+    assert rms[0] > 0.01, f"first second rms {rms}"
+    assert rms[1] < 0.001, f"middle muted rms {rms}"
+    assert rms[2] > 0.01, f"last second rms {rms}"
+
+
 check("stopping while paused still finishes and produces a playable file", t_stop_while_paused)
+check("muting silences the middle second while keeping audio in step", t_mute_silences_middle_second)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)

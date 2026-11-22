@@ -393,10 +393,15 @@ class Capture:
         self.stop_ev = threading.Event()
         self.lock = threading.Lock()
         self._paused_at = None
+        self.muted = False
         self.error = None
         self.mic_ok = False
         self.encoder = None
         self.frames = 0
+
+    def mute(self, on: bool):
+        with self.lock:
+            self.muted = bool(on)
 
     def pause(self):
         with self.lock:
@@ -531,10 +536,13 @@ class Capture:
                 block = mic.record(numframes=1024)
                 with self.lock:
                     paused = self._paused_at is not None
+                    muted = self.muted
                     t0 = self.t0
                 if paused:
                     pts = None
                     continue
+                if muted:
+                    block = np.zeros_like(block)
                 if pts is None:     # line the sound up with the picture
                     pts = max(min_pts, int((time.monotonic() - t0) * 48000) - len(block))
                 frame = av.AudioFrame.from_ndarray(np.ascontiguousarray(block[:, :1].T, dtype=np.float32),
@@ -890,6 +898,19 @@ def child_main(outbox_dir: str) -> int:
                           relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
                           font=("Segoe UI", 10), padx=6)
     pause_btn.pack(side="left", padx=(10, 0), pady=6)
+    mic_btn = None
+
+    def set_muted(on):
+        cap.mute(on)
+        if mic_btn is not None:
+            mic_btn.config(text="Mic off" if cap.muted else "Mic on",
+                           fg="#9CA3AF" if cap.muted else "#ECEAF3")
+
+    if cap.a is not None:
+        mic_btn = tk.Button(badge, text="Mic on", width=7, command=lambda: set_muted(not cap.muted),
+                            relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
+                            font=("Segoe UI", 10), padx=6)
+        mic_btn.pack(side="left", padx=(6, 0), pady=6)
     tk.Button(badge, text="Stop", command=stop_asked.set, relief="flat", bg="#EF4444", fg="#ECEAF3",
               activebackground="#DC2626", font=("Segoe UI", 10, "bold"), padx=10).pack(side="left", padx=10, pady=6)
     badge.update_idletasks()
@@ -904,6 +925,10 @@ def child_main(outbox_dir: str) -> int:
             set_paused(True)
         elif cmd == "resume":
             set_paused(False)
+        elif cmd == "mute":
+            set_muted(True)
+        elif cmd == "unmute":
+            set_muted(False)
 
     def schedule_cmd(cmd):
         try:
