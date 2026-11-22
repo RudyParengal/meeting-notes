@@ -331,9 +331,12 @@ def t_flash_hidden_and_click_through():
         pid = W.DWORD()
         u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if pid.value == real_pid and u32.IsWindowVisible(hwnd):
-            aff = W.DWORD()
-            u32.GetWindowDisplayAffinity(hwnd, ctypes.byref(aff))
-            found.append((aff.value, u32.GetWindowLongW(hwnd, -20) & 0x20))
+            cls = ctypes.create_unicode_buffer(64)
+            u32.GetClassNameW(hwnd, cls, 64)
+            if cls.value == "TkTopLevel":
+                aff = W.DWORD()
+                u32.GetWindowDisplayAffinity(hwnd, ctypes.byref(aff))
+                found.append((aff.value, u32.GetWindowLongW(hwnd, -20) & 0x20))
         return True
     u32.EnumWindows(ctypes.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)(each), 0)
     code = p.wait(10)
