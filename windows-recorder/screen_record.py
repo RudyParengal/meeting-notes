@@ -392,10 +392,26 @@ class Capture:
                                  f"hwdownload,format=bgra")
         self.stop_ev = threading.Event()
         self.lock = threading.Lock()
+        self._paused_at = None
         self.error = None
         self.mic_ok = False
         self.encoder = None
         self.frames = 0
+
+    def pause(self):
+        with self.lock:
+            if self._paused_at is None:
+                self._paused_at = time.monotonic()
+
+    def resume(self):
+        with self.lock:
+            if self._paused_at is not None:
+                self.t0 += time.monotonic() - self._paused_at
+                self._paused_at = None
+
+    @property
+    def paused(self):
+        return self._paused_at is not None
 
     def start(self):
         import av
@@ -479,14 +495,17 @@ class Capture:
             frame = first
             frames = self.src.decode(video=0)
             while True:
-                pts = int((time.monotonic() - self.t0) * 1000)
-                if pts <= last:
-                    pts = last + 1
-                f = frame.reformat(width=self.v.width, height=self.v.height, format=self.fmt)
-                f.pts, f.time_base = pts, Fraction(1, 1000)
-                self._mux(self.v.encode(f))
-                last = pts
-                self.frames += 1
+                with self.lock:
+                    paused = self._paused_at is not None
+                    pts = None if paused else int((time.monotonic() - self.t0) * 1000)
+                if not paused:
+                    if pts <= last:
+                        pts = last + 1
+                    f = frame.reformat(width=self.v.width, height=self.v.height, format=self.fmt)
+                    f.pts, f.time_base = pts, Fraction(1, 1000)
+                    self._mux(self.v.encode(f))
+                    last = pts
+                    self.frames += 1
                 if self.stop_ev.is_set():
                     break
                 frame = next(frames)
@@ -507,14 +526,22 @@ class Capture:
         import numpy as np
         try:
             pts = None
+            min_pts = 0
             while not self.stop_ev.is_set():
                 block = mic.record(numframes=1024)
+                with self.lock:
+                    paused = self._paused_at is not None
+                    t0 = self.t0
+                if paused:
+                    pts = None
+                    continue
                 if pts is None:     # line the sound up with the picture
-                    pts = max(0, int((time.monotonic() - self.t0) * 48000) - len(block))
+                    pts = max(min_pts, int((time.monotonic() - t0) * 48000) - len(block))
                 frame = av.AudioFrame.from_ndarray(np.ascontiguousarray(block[:, :1].T, dtype=np.float32),
                                                    format="flt", layout="mono")
                 frame.sample_rate, frame.pts, frame.time_base = 48000, pts, Fraction(1, 48000)
                 pts += len(block)
+                min_pts = pts
                 self._mux(self.a.encode(frame))
             self._mux(self.a.encode())
         except Exception as e:
@@ -528,9 +555,11 @@ class Capture:
 
     def video_ms(self):
         """Milliseconds since the first frame's clock started: the events file uses this clock."""
-        return int((time.monotonic() - self.t0) * 1000)
+        with self.lock:
+            return int(((self._paused_at or time.monotonic()) - self.t0) * 1000)
 
     def stop(self):
+        self.resume()
         self.stop_ev.set()
         for t in self.threads:
             t.join(timeout=15)
@@ -735,7 +764,8 @@ def start_events(box, job, cap, area, test_mode):
             box.events(job["client_id"]), area, cap.video_ms, (cap.v.width, cap.v.height),
             is_private=lambda exe, title: bool(never_record_reasons([(exe, title)])),
             probe=None if test_mode else screen_events.WinProbe(os.getpid()),
-            own_pid=os.getpid())
+            own_pid=os.getpid(),
+            paused=lambda: cap.paused)
         w.start()
         return w
     except Exception:
@@ -774,11 +804,24 @@ def child_main(outbox_dir: str) -> int:
         out.flush()
 
     stop_asked = threading.Event()
+    cmd_lock = threading.Lock()
+    cmd_handler = {"fn": None}
+    pending_cmds = []
 
     def read_stdin():
         for line in inp:
-            if line.strip() == "stop":
+            cmd = line.strip()
+            if not cmd:
+                continue
+            if cmd == "stop":
                 stop_asked.set()
+                continue
+            with cmd_lock:
+                fn = cmd_handler["fn"]
+                if fn is None:
+                    pending_cmds.append(cmd)
+                else:
+                    fn(cmd)
         stop_asked.set()                       # the main copy went away: stop too
     threading.Thread(target=read_stdin, daemon=True).start()
 
@@ -830,9 +873,23 @@ def child_main(outbox_dir: str) -> int:
     badge.overrideredirect(True)
     badge.attributes("-topmost", True)
     badge.configure(bg="#17141F")
-    tk.Label(badge, text="●", fg="#EF4444", bg="#17141F", font=("Segoe UI", 12)).pack(side="left", padx=(10, 4))
+    dot = tk.Label(badge, text="●", fg="#EF4444", bg="#17141F", font=("Segoe UI", 12))
+    dot.pack(side="left", padx=(10, 4))
     clock = tk.Label(badge, text="0:00", fg="#ECEAF3", bg="#17141F", font=("Segoe UI", 11))
     clock.pack(side="left")
+
+    def set_paused(on):
+        if on:
+            cap.pause()
+        else:
+            cap.resume()
+        dot.config(fg="#9CA3AF" if cap.paused else "#EF4444")
+        pause_btn.config(text="Resume" if cap.paused else "Pause")
+
+    pause_btn = tk.Button(badge, text="Pause", width=7, command=lambda: set_paused(not cap.paused),
+                          relief="flat", bg="#2D2A36", fg="#ECEAF3", activebackground="#3D3A47",
+                          font=("Segoe UI", 10), padx=6)
+    pause_btn.pack(side="left", padx=(10, 0), pady=6)
     tk.Button(badge, text="Stop", command=stop_asked.set, relief="flat", bg="#EF4444", fg="#ECEAF3",
               activebackground="#DC2626", font=("Segoe UI", 10, "bold"), padx=10).pack(side="left", padx=10, pady=6)
     badge.update_idletasks()
@@ -842,11 +899,29 @@ def child_main(outbox_dir: str) -> int:
     log.info("recording screen %d (%dx%d), encoder %s, mic %s, badge hidden from capture: %s",
              idx + 1, w, h, cap.encoder, cap.mic_ok, hidden)
 
+    def handle_cmd(cmd):
+        if cmd == "pause":
+            set_paused(True)
+        elif cmd == "resume":
+            set_paused(False)
+
+    def schedule_cmd(cmd):
+        try:
+            root.after(0, handle_cmd, cmd)
+        except Exception:
+            pass
+
+    with cmd_lock:
+        cmd_handler["fn"] = schedule_cmd
+        for c in pending_cmds:
+            schedule_cmd(c)
+        pending_cmds.clear()
+
     def tick():
         if stop_asked.is_set() or cap.stop_ev.is_set():
             root.quit()
             return
-        s = int(time.monotonic() - cap.t0)
+        s = max(0, cap.video_ms() // 1000)
         clock.config(text=f"{s // 60}:{s % 60:02d}")
         root.after(250, tick)
     # Started from inside the loop: if capture already failed, quit() before

@@ -367,7 +367,47 @@ def t_capture_video_ms():
     assert 1150 <= ms <= 1600, ms
 
 
+def t_watcher_paused_skips_clicks_and_resets_buttons():
+    p = tmp() / "paused.events.jsonl"
+    state = {"paused": False, "t": 0}
+    probe = FakeProbe(fg=(101, "notepad.exe", "notes.txt"), cur=(200, 200), btns=(False, False), li=10)
+    w = se.Watcher(p, (0, 0, 800, 600), lambda: state["t"], (800, 600), _is_priv,
+                   probe=probe, own_pid=999, paused=lambda: state["paused"])
+    w.step(0, windows=True)
+    # Start typing burst before pause
+    probe.li = 11
+    w.step(100, windows=False)
+    probe.li = 12
+    w.step(300, windows=False)
+    # Pause: typing flushes once; clicks during pause are ignored
+    state["paused"] = True
+    state["t"] = 350
+    w.step(350, windows=False)
+    probe.btns = (True, False)
+    w.step(350, windows=False)
+    probe.btns = (False, False)
+    w.step(350, windows=False)
+    # Hold button across resume: must not create a click on resume
+    probe.btns = (True, False)
+    state["paused"] = False
+    w.step(400, windows=False)
+    probe.btns = (False, False)
+    w.step(450, windows=False)
+    # Real click after resume is recorded
+    probe.btns = (True, False)
+    w.step(500, windows=False)
+    state["t"] = 600
+    w.stop()
+    rows = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines()]
+    clicks = [r for r in rows if r.get("k") == "click"]
+    typings = [r for r in rows if r.get("k") == "typing"]
+    assert clicks == [{"t": 500, "k": "click", "b": "left", "x": 200, "y": 200}], clicks
+    assert typings == [{"t": 100, "k": "typing", "ms": 200}], typings
+
+
 check("Capture.video_ms returns milliseconds since t0", t_capture_video_ms)
+check("Watcher flushes typing on pause, skips clicks while paused, and resets held buttons on resume",
+      t_watcher_paused_skips_clicks_and_resets_buttons)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)

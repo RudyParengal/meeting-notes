@@ -275,17 +275,17 @@ def _os_label():
 class Watcher:
     """Polls WinProbe in a daemon thread and writes <cid>.events.jsonl. Never raises from stop()."""
 
-    def __init__(self, path, area, clock, video_size, is_private, probe=None, own_pid=None):
+    def __init__(self, path, area, clock, video_size, is_private, probe=None, own_pid=None, paused=None):
         self.path = Path(path)
         self.area = tuple(int(v) for v in area)
         self.clock = clock
         self.video_size = [int(video_size[0]), int(video_size[1])]
-        self.is_private, self.probe = is_private, probe
+        self.is_private, self.probe, self.paused = is_private, probe, paused
         self.own_pid = os.getpid() if own_pid is None else own_pid
         self._windows, self._clicks, self._typing = Windows(), Clicks(), Typing()
         self._writer = self._thread = self._last_input = self._last_cursor = None
         self._stop = threading.Event()
-        self._stopped = self._front_private = self._prev_any_btn = False
+        self._stopped = self._front_private = self._prev_any_btn = self._was_paused = False
         self._last_now = 0
 
     def _header(self):
@@ -310,6 +310,20 @@ class Watcher:
             return
         self._ensure_open()
         now_i = max(0, int(now))
+        if self.paused is not None and self.paused():
+            if not self._was_paused:
+                tev = self._typing.flush(now_i)
+                if tev is not None:
+                    self._writer.line(tev)
+                self._was_paused = True
+            return
+        if self._was_paused:
+            self._was_paused = False
+            left, right = self.probe.buttons()
+            self._clicks.prev_left, self._clicks.prev_right = bool(left), bool(right)
+            self._last_input = self.probe.last_input()
+            self._last_cursor = self.probe.cursor()
+            self._prev_any_btn = bool(left) or bool(right)
         self._last_now = now_i
 
         if windows:

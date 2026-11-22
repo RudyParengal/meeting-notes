@@ -608,9 +608,107 @@ def t_crash_keeps_what_was_recorded():
     assert all(r.get("k") != "end" for r in rows), rows
 
 
+def _record_script(steps, env_extra=None):
+    """Run the child with test source; wait for 'started', then run [(delay_s, cmd), ...]."""
+    home = tmp()
+    outdir = home / "screen" / "outbox"
+    outdir.mkdir(parents=True)
+    env = {**os.environ, "NOTEWELL_SCREEN_TEST_SOURCE": "testsrc=size=1280x720:rate=15,realtime"}
+    if env_extra:
+        env.update(env_extra)
+    p = subprocess.Popen([sys.executable, "-c", CHILD, str(outdir), MODDIR, str(ROOT / "windows-recorder")],
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         env=env, text=True, encoding="utf-8")
+    events = []
+    first = p.stdout.readline()
+    if first.strip():
+        events.append(json.loads(first))
+    for delay, cmd in steps:
+        if delay:
+            time.sleep(delay)
+        if cmd is not None:
+            p.stdin.write(cmd + "\n")
+            p.stdin.flush()
+    try:
+        out, _ = p.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        raise AssertionError("the recording copy did not finish within 30 s")
+    for line in out.splitlines():
+        if line.strip():
+            events.append(json.loads(line))
+    return home, events
+
+
+def _pts_and_duration(path):
+    import av
+    v_pts, a_pts = [], []
+    with av.open(str(path)) as c:
+        vs = c.streams.video[0]
+        as_ = c.streams.audio[0] if c.streams.audio else None
+        for pkt in c.demux():
+            if pkt.dts is None and pkt.pts is None:
+                continue
+            if pkt.stream.type == "video":
+                for f in pkt.decode():
+                    if f.pts is not None:
+                        v_pts.append(f.pts)
+            elif pkt.stream.type == "audio":
+                for f in pkt.decode():
+                    if f.pts is not None:
+                        a_pts.append(f.pts)
+        v_dur = (v_pts[-1] - v_pts[0]) * float(vs.time_base) if len(v_pts) >= 2 else 0.0
+    return v_pts, a_pts, v_dur
+
+
+def t_video_ms_freezes_on_pause():
+    cap = sr.Capture(tmp() / "v.mp4", 0)
+    cap.t0 = time.monotonic() - 1.0
+    cap.pause()
+    assert cap.paused
+    a = cap.video_ms()
+    time.sleep(0.2)
+    b = cap.video_ms()
+    assert a == b, (a, b)
+    cap.resume()
+    assert not cap.paused
+    c = cap.video_ms()
+    assert abs(c - a) < 100, (a, c)
+    time.sleep(0.2)
+    d = cap.video_ms()
+    assert d - c >= 120, (c, d)
+
+
+def t_record_with_pause():
+    home, events = _record_script([(1.5, "pause"), (2.0, "resume"), (1.5, "stop")])
+    done = [e for e in events if e.get("event") == "done"]
+    assert done and not done[0]["error"], events
+    box = sr.Outbox(home / "screen")
+    jobs = box.waiting()
+    assert len(jobs) == 1, jobs
+    v_pts, a_pts, v_dur = _pts_and_duration(box.video(jobs[0]["client_id"]))
+    assert 2.5 <= v_dur <= 3.6, f"duration {v_dur:.2f} s"
+    assert len(v_pts) >= 30 and all(v_pts[i] < v_pts[i + 1] for i in range(len(v_pts) - 1)), v_pts[:10]
+    assert len(a_pts) >= 30 and all(a_pts[i] < a_pts[i + 1] for i in range(len(a_pts) - 1)), a_pts[:10]
+
+
+def t_stop_while_paused():
+    home, events = _record_script([(1.5, "pause"), (1.0, "stop")])
+    done = [e for e in events if e.get("event") == "done"]
+    assert done and not done[0]["error"], events
+    box = sr.Outbox(home / "screen")
+    jobs = box.waiting()
+    assert len(jobs) == 1, jobs
+    kinds, n = _frames(box.video(jobs[0]["client_id"]))
+    assert kinds == ["audio", "video"] and n >= 10, (kinds, n)
+
+
 check("5 s of recording: picture and sound, 15 frames a second, 3 files", t_records_picture_and_sound)
 check("killed mid-recording: what was recorded still plays", t_crash_keeps_what_was_recorded)
 check("start_events and stop_events never raise when something breaks", t_start_and_stop_events_never_raise)
+check("Capture.video_ms freezes during pause and resumes from the same value", t_video_ms_freezes_on_pause)
+check("recording with a 2 s pause leaves the pause out and keeps pts rising", t_record_with_pause)
+check("stopping while paused still finishes and produces a playable file", t_stop_while_paused)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)
