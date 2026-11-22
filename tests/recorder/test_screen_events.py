@@ -358,5 +358,16 @@ check("scripted Watcher session records expected header and events in order", t_
 check("a probe that always raises still lets stop() write the end line", t_watcher_broken_probe_still_writes_end)
 check("probe=None writes header+end only; real Watcher thread starts and stops within 1 s", t_watcher_probe_none_and_threaded_fake)
 
+
+def t_capture_video_ms():
+    import screen_record as sr
+    cap = sr.Capture(tmp() / "v.mp4", 0)
+    cap.t0 = time.monotonic() - 1.25
+    ms = cap.video_ms()
+    assert 1150 <= ms <= 1600, ms
+
+
+check("Capture.video_ms returns milliseconds since t0", t_capture_video_ms)
+
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)

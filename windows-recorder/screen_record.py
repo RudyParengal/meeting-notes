@@ -469,6 +469,10 @@ class Capture:
             except Exception:
                 pass
 
+    def video_ms(self):
+        """Milliseconds since the first frame's clock started: the events file uses this clock."""
+        return int((time.monotonic() - self.t0) * 1000)
+
     def stop(self):
         self.stop_ev.set()
         for t in self.threads:
