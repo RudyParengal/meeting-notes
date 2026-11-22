@@ -119,6 +119,11 @@ def main() -> int:
     url = os.environ.pop("NOTEWELL_WINDOW_URL", "")   # not passed on to the engine's helpers
     if url and not is_own(QUrl(url)):
         return 2
+    # Smooth grey text edges, as Chrome draws this page. Without it the engine
+    # uses coloured-edge text, which looks thin and jagged on 100% screens.
+    flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+    if "--disable-lcd-text" not in flags:
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (flags + " --disable-lcd-text").strip()
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Notewell")
     app.setWindowIcon(QIcon(str(ICON)))

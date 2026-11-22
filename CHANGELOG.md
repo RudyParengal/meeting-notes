@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.7.4: Sharper text in the app window (22 Nov 2026)
+
+### Fixed
+- **Text in the app window no longer looks jagged on a 100% screen.** The window now smooths text edges the same way Chrome does, so it looks like the website.
+
 ## 2.7.3: One Share box for screen recordings (22 Nov 2026)
 
 ### Changed
