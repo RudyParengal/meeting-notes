@@ -900,7 +900,51 @@ def t_draw_stroke_fades_after_3s():
 
 
 check("discard keeps files in discarded/ and mark_sent moves .untrimmed.mp4", t_discard_and_untrimmed_move_aside)
+def t_mask_frame_pixelates_and_leaves_rest():
+    import numpy as np
+    arr = np.zeros((64, 64, 4), dtype=np.uint8)
+    arr[:, ::2] = [20, 40, 200, 255]
+    arr[:, 1::2] = [220, 200, 40, 255]
+    orig = arr.copy()
+    out = sr.mask_frame(arr, [(0, 0, 32, 32)], block=16)
+    assert out is arr
+    for by in (0, 16):
+        for bx in (0, 16):
+            blk = arr[by:by + 16, bx:bx + 16]
+            assert np.all(blk == blk[0, 0]), f"block ({bx},{by}) not flat"
+    # Outside the masked rect is untouched
+    assert np.array_equal(arr[:, 32:], orig[:, 32:])
+    assert np.array_equal(arr[32:, :32], orig[32:, :32])
+
+
+def t_record_with_mask_hides_top_left():
+    import av
+    import numpy as np
+    # Use a fine checkerboard/noise-like pattern via testsrc2 or testsrc; testsrc has sharp detail
+    # and we verify the top-left 64x64 has low colour variation per 16x16 block in the last frame.
+    home, events = _record_script([(0.0, "mask 0,0,64,64"), (1.5, "stop")])
+    done = [e for e in events if e.get("event") == "done"]
+    assert done and not done[0]["error"], events
+    box = sr.Outbox(home / "screen")
+    vid = box.video(box.waiting()[0]["client_id"])
+    last_rgb = None
+    with av.open(str(vid)) as c:
+        for frame in c.decode(video=0):
+            last_rgb = frame.to_ndarray(format="rgb24")
+    assert last_rgb is not None
+    # Quantise slightly (by 8) to tolerate H.264 4:2:0 codec ringing on block edges, and also check raw interior
+    for by in range(0, 64, 16):
+        for bx in range(0, 64, 16):
+            interior = last_rgb[by + 2:by + 14, bx + 2:bx + 14]
+            uniq = np.unique(interior.reshape(-1, 3), axis=0)
+            assert len(uniq) < 5, f"block ({bx},{by}) has {len(uniq)} distinct colours"
+
+
 check("drawing strokes use red round lines and fade after 3 s", t_draw_stroke_fades_after_3s)
+check("mask_frame flattens each 16x16 block inside the rect and leaves the rest untouched",
+      t_mask_frame_pixelates_and_leaves_rest)
+check("recording with mask 0,0,64,64 decodes with flat 16x16 blocks in top-left",
+      t_record_with_mask_hides_top_left)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)

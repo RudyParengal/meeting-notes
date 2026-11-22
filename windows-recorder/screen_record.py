@@ -497,6 +497,25 @@ def pick_windows(walk=None, own_pid=None, blocked_apps=None):
     return out
 
 
+def mask_frame(bgra, rects, block=16):
+    """Pixelate each rect in place on an H x W x 4 uint8 array; return the array."""
+    h, w = bgra.shape[:2]
+    step = max(1, int(block))
+    for rx, ry, rw, rh in rects:
+        x1 = max(0, min(w, int(rx)))
+        y1 = max(0, min(h, int(ry)))
+        x2 = max(0, min(w, int(rx) + int(rw)))
+        y2 = max(0, min(h, int(ry) + int(rh)))
+        if x2 <= x1 or y2 <= y1:
+            continue
+        for y in range(y1, y2, step):
+            ye = min(y + step, y2)
+            for x in range(x1, x2, step):
+                xe = min(x + step, x2)
+                bgra[y:ye, x:xe] = bgra[y:ye, x:xe].mean(axis=(0, 1), dtype=float).astype(bgra.dtype)
+    return bgra
+
+
 # ============================================================ the recording ===
 class Capture:
     """Screen + microphone into one MP4. Runs in the child copy."""
@@ -516,10 +535,21 @@ class Capture:
         self.lock = threading.Lock()
         self._paused_at = None
         self.muted = False
+        self.masks = []
         self.error = None
         self.mic_ok = False
         self.encoder = None
         self.frames = 0
+
+    def add_mask(self, rect):
+        rx, ry, rw, rh = (int(v) for v in rect)
+        if rw > 0 and rh > 0:
+            with self.lock:
+                self.masks.append((rx, ry, rw, rh))
+
+    def clear_masks(self):
+        with self.lock:
+            self.masks.clear()
 
     def mute(self, on: bool):
         with self.lock:
@@ -616,6 +646,7 @@ class Capture:
                 self.out.mux(p)
 
     def _video(self, first):
+        import av
         from fractions import Fraction
         try:
             last = -1
@@ -625,10 +656,18 @@ class Capture:
                 with self.lock:
                     paused = self._paused_at is not None
                     pts = None if paused else int((time.monotonic() - self.t0) * 1000)
+                    masks = list(self.masks)
                 if not paused:
                     if pts <= last:
                         pts = last + 1
-                    f = frame.reformat(width=self.v.width, height=self.v.height, format=self.fmt)
+                    if masks:
+                        src_f = frame if frame.format.name == "bgra" else frame.reformat(format="bgra")
+                        arr = src_f.to_ndarray()
+                        mask_frame(arr, masks)
+                        frame_in = av.VideoFrame.from_ndarray(arr, format="bgra")
+                    else:
+                        frame_in = frame
+                    f = frame_in.reformat(width=self.v.width, height=self.v.height, format=self.fmt)
                     f.pts, f.time_base = pts, Fraction(1, 1000)
                     self._mux(self.v.encode(f))
                     last = pts
@@ -1512,8 +1551,42 @@ def child_main(outbox_dir: str) -> int:
                          font=("Segoe UI", 10), padx=6)
     draw_btn.pack(side="left", padx=(6, 0), pady=6)
     badge.bind("<Escape>", lambda e: draw.set_on(False))
-    tk.Button(badge, text="Stop", command=stop_asked.set, relief="flat", bg="#EF4444", fg="#ECEAF3",
-              activebackground="#DC2626", font=("Segoe UI", 10, "bold"), padx=10).pack(side="left", padx=10, pady=6)
+
+    def sync_clear_btn():
+        with cap.lock:
+            has_masks = bool(cap.masks)
+        if has_masks and not clear_btn.winfo_ismapped():
+            clear_btn.pack(side="left", padx=(6, 0), pady=6, before=stop_btn)
+        elif not has_masks and clear_btn.winfo_ismapped():
+            clear_btn.pack_forget()
+
+    def add_mask_rect(rect):
+        cap.add_mask(rect)
+        sync_clear_btn()
+
+    def clear_all_masks():
+        cap.clear_masks()
+        sync_clear_btn()
+
+    def pick_hide_area():
+        if draw.on:
+            draw.set_on(False)
+        rect = _drag_region(root, area, tk, prompt="Drag an area to hide. Esc to cancel.", min_size=16)
+        if rect is not None:
+            add_mask_rect((rect[0] - area[0], rect[1] - area[1], rect[2], rect[3]))
+        try:
+            badge.lift()
+        except tk.TclError:
+            pass
+
+    tk.Button(badge, text="Hide area", command=pick_hide_area, relief="flat", bg="#2D2A36",
+              fg="#ECEAF3", activebackground="#3D3A47", font=("Segoe UI", 10), padx=6).pack(
+                  side="left", padx=(6, 0), pady=6)
+    clear_btn = tk.Button(badge, text="Clear", command=clear_all_masks, relief="flat", bg="#2D2A36",
+                          fg="#ECEAF3", activebackground="#3D3A47", font=("Segoe UI", 10), padx=6)
+    stop_btn = tk.Button(badge, text="Stop", command=stop_asked.set, relief="flat", bg="#EF4444", fg="#ECEAF3",
+                         activebackground="#DC2626", font=("Segoe UI", 10, "bold"), padx=10)
+    stop_btn.pack(side="left", padx=10, pady=6)
     badge.update_idletasks()
     mx, my, mw, mh = mon
     badge.geometry(f"+{mx + (mw - badge.winfo_reqwidth()) // 2}+{my + 8}")
@@ -1534,6 +1607,15 @@ def child_main(outbox_dir: str) -> int:
             draw.set_on(True)
         elif cmd == "draw off":
             draw.set_on(False)
+        elif cmd == "mask clear":
+            clear_all_masks()
+        elif cmd.startswith("mask "):
+            parts = cmd[5:].strip().split(",")
+            if len(parts) == 4:
+                try:
+                    add_mask_rect(tuple(int(p) for p in parts))
+                except ValueError:
+                    pass
 
     def schedule_cmd(cmd):
         try:
