@@ -8,7 +8,12 @@
   window.__notewellConsoleHookInstalled = true;
 
   var MSG_MAX = 500;
-  var SOURCE_TAG = "notewell-console-hook";
+  var HELLO_TAG = "notewell-console-hello";
+  var OFFER_TAG = "notewell-console-offer";
+  var port = null;
+  var pending = [];
+  var PENDING_MAX = 50;
+  var origPostMessage = window.postMessage;
   var lastErrMsg = "";
   var lastErrAt = 0;
 
@@ -70,20 +75,34 @@
       if (!text) {
         return;
       }
-      var target =
-        window.location &&
-        window.location.origin &&
-        window.location.origin !== "null"
-          ? window.location.origin
-          : "*";
-      window.postMessage(
-        { source: SOURCE_TAG, level: level, message: text },
-        target
-      );
+      if (port) {
+        port.postMessage({ level: level, message: text });
+      } else if (pending.length < PENDING_MAX) {
+        pending.push({ level: level, message: text });
+      }
     } catch (_) {
       // Never interfere with the page.
     }
   }
+
+  // Lines go to content.js over a private channel, so a page cannot forge them
+  // with window.postMessage. Take the first port offered, before page scripts run.
+  function onOffer(ev) {
+    var d = ev.data;
+    if (port || ev.source !== window || !d || d.source !== OFFER_TAG || !ev.ports || !ev.ports[0]) {
+      return;
+    }
+    port = ev.ports[0];
+    window.removeEventListener("message", onOffer, true);
+    ev.stopImmediatePropagation();
+    while (pending.length) {
+      port.postMessage(pending.shift());
+    }
+  }
+  window.addEventListener("message", onOffer, true);
+  try {
+    origPostMessage.call(window, { source: HELLO_TAG }, "*");
+  } catch (_) {}
 
   function emitUncaught(msg, err) {
     var text = err instanceof Error ? formatPart(err) : formatPart(msg);
