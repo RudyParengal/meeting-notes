@@ -130,8 +130,9 @@ async function askHello(port) {
   var ctrl = new AbortController();
   var timer = setTimeout(function () { ctrl.abort(); }, HELLO_TIMEOUT_MS);
   try {
+    // POST, not GET: Chrome sends no Origin header on GET, and the app needs it.
     var resp = await fetch("http://127.0.0.1:" + port + "/hello", {
-      method: "GET",
+      method: "POST",
       mode: "cors",
       cache: "no-store",
       signal: ctrl.signal

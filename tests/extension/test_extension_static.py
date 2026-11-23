@@ -248,6 +248,17 @@ def t_protocol_and_hooks():
 check("background.js, console-hook.js and README.md match B1/B2 contract", t_protocol_and_hooks)
 
 
+def t_hello_uses_post():
+    # Chrome sends no Origin header on this GET, so the app refused every hello (23 Nov).
+    bg = (EXT_DIR / "background.js").read_text(encoding="utf-8")
+    m = re.search(r"async function askHello\(port\) \{(.*?)\n\}", bg, re.S)
+    assert m, "askHello not found"
+    assert re.search(r'method:\s*"POST"', m.group(1)), "askHello must use POST so Chrome sends Origin"
+
+
+check("askHello asks the app with POST (Chrome adds Origin only then)", t_hello_uses_post)
+
+
 # ------------------------------------------------------------------- clean_url
 print("\nclean_url cases")
 

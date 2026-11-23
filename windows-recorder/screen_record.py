@@ -306,6 +306,10 @@ def _review_dialog(root, tk, job, video_path, seconds, area, stop_asked, stdin_c
         if stop_asked.is_set() or stdin_closed.is_set():
             do_send(strict=False)
             return
+        if win.state() == "iconic":
+            # Minimised, nobody found it and the recording waited unsent for hours (23 Nov 03:41).
+            win.deiconify()
+            win.lift()
         root.after(100, poll)
 
     _centre(win, area)

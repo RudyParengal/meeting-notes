@@ -4,7 +4,8 @@ Runs only on 127.0.0.1 (first free port of 47811..47815) while a screen recordin
 Writes port and one-use random secret to <screen_root>/bridge.json on start and moves it to
 bridge.old.json on stop. Never logs or prints the secret.
 
-GET /hello returns {"secret": "..."} ONLY when Origin equals EXTENSION_ORIGIN.
+POST (or GET) /hello returns {"secret": "..."} ONLY when Origin equals EXTENSION_ORIGIN.
+The helper uses POST, because Chrome sends no Origin header on an extension's GET.
 POST /events requires header X-Notewell-Bridge matching the secret, body <= 256 KB, JSON list
 of <= 200 validated browser events (kinds page, console, request only).
 """
@@ -232,6 +233,14 @@ class Bridge:
                 self.close_connection = True
 
             def do_POST(self):
+                if self.path == "/hello":
+                    # The helper asks with POST: Chrome sends no Origin on its GET (measured 23 Nov).
+                    self._drain()
+                    if self.headers.get("Origin") != bridge.origin:
+                        self._send_json(403, {"error": "forbidden"})
+                        return
+                    self._send_json(200, {"secret": bridge.secret}, cors_origin=bridge.origin)
+                    return
                 if self.path != "/events":
                     self._drain()
                     self._send_json(404, {"error": "not found"})

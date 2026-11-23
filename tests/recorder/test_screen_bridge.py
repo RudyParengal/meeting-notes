@@ -106,6 +106,28 @@ def t_hello_origin_and_lifecycle():
     assert not (d / "bridge.json").exists() and (d / "bridge.old.json").exists()
 
 
+def t_hello_post_needs_exact_origin():
+    # Chrome sends no Origin on the helper's GET /hello (measured 23 Nov: 15 of 15 refused),
+    # but always sends it on POST, so the helper asks with POST.
+    d = tmp()
+    b = sb.Bridge(d, lambda: 5000, lambda ev: True)
+    port = b.start()
+    try:
+        for bad_hdrs in ({}, {"Origin": "https://evil.example"}, {"Origin": "chrome-extension://wrongid"}):
+            code, _h, raw = req(port, "POST", "/hello", headers=bad_hdrs)
+            assert code == 403 and b.secret.encode() not in raw, (bad_hdrs, code, raw)
+        code, hdrs, raw = req(port, "POST", "/hello", headers={"Origin": sb.EXTENSION_ORIGIN})
+        assert code == 200 and json.loads(raw) == {"secret": b.secret}, (code, raw)
+        assert hdrs.get("Access-Control-Allow-Origin") == sb.EXTENSION_ORIGIN, hdrs
+        code, hdrs, raw = req(port, "POST", "/hello", body=b"{}",
+                              headers={"Origin": sb.EXTENSION_ORIGIN, "Content-Type": "application/json"})
+        assert code == 200 and json.loads(raw) == {"secret": b.secret}, (code, raw)
+        code, hdrs, _ = req(port, "OPTIONS", "/hello", headers={"Origin": sb.EXTENSION_ORIGIN})
+        assert code == 204 and "POST" in hdrs.get("Access-Control-Allow-Methods", ""), (code, hdrs)
+    finally:
+        b.stop()
+
+
 def t_post_events_good_scrubbed_and_rejected():
     d = tmp()
     ev_path = d / "ev.events.jsonl"
@@ -178,6 +200,7 @@ def t_start_stop_bridge_safe():
 
 
 check("/hello checks exact extension Origin and bridge.json moves to bridge.old.json on stop", t_hello_origin_and_lifecycle)
+check("POST /hello gives the secret only to the exact extension Origin", t_hello_post_needs_exact_origin)
 check("/events accepts valid scrubbed lines, rejects wrong secret (403), bad/header lines (400), >256 KB (413)", t_post_events_good_scrubbed_and_rejected)
 check("start_bridge and stop_bridge never raise and skip test_mode", t_start_stop_bridge_safe)
 
