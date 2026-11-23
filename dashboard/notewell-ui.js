@@ -5,6 +5,7 @@
 // nwAlert({title, body, ok}) -> Promise: a box with one button.
 // nwShareBox({title, url, on, passwordSet, expires, save}) -> Promise<true|false>: the one Share box (link, password, end date).
 // nwErrorBanner(text, onRetry) and nwEmpty(title, sentence, buttonText, onClick) return an element to put in the page.
+// nwDocStatus(doc, pct) and nwSendDocument(file, onProgress, base): Documents, shared by every page that shows them.
 // Screen readers hear toasts (role=status, or role=alert for errors); boxes are role=dialog and keep the keyboard inside.
 (function () {
   function region() {
@@ -202,6 +203,63 @@
       b.type = 'button'; b.onclick = onClick; e.appendChild(b);
     }
     return e;
+  };
+
+  // Documents (23 Nov 2026): one upload routine for the website, the phone and the documents page.
+  // nwDocStatus(doc, percentSentOrNull) -> the one line that says where a document is.
+  window.nwDocStatus = function (d, pct) {
+    if (d.status === 'uploading')
+      return pct == null ? 'Upload stopped at ' + Math.round(100 * d.received / (d.size || 1)) + '%. Choose the same file again to carry on.'
+                         : 'Sending… ' + pct + '%';
+    if (d.status === 'queued') return 'Waiting to be read…';
+    if (d.status === 'reading') return d.total ? 'Reading page ' + d.done + ' of ' + d.total + '…' : 'Starting to read…';
+    if (d.status === 'ready') return d.pages + ' pages · ready for AI' + (d.seconds ? ' · read in ' + Math.max(1, Math.round(d.seconds / 60)) + ' min' : '');
+    return d.error || 'Could not read this PDF.';
+  };
+  // nwSendDocument(file, onProgress(id, percentOrNull), base) -> Promise<true|false>. Sends in pieces and carries on
+  // where it stopped; onProgress(id, null) means it has finished or given up. base is '' on the server;
+  // the desktop app passes '/account' and its sign-in header, because it has no sign-in cookie.
+  window.nwSendDocument = async function (file, onProgress, base, headers) {
+    base = base || '';
+    headers = headers || {};
+    onProgress = onProgress || function () {};
+    if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') { window.nwToast('That is not a PDF.', 'error'); return false; }
+    var title = file.name.replace(/\.pdf$/i, '').replace(/[_]+/g, ' ');
+    var r, doc;
+    try {
+      r = await fetch(base + '/documents', { method: 'POST', credentials: 'same-origin', headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
+        body: JSON.stringify({ title: title, size: file.size, client_id: 'web-' + file.name + '-' + file.size + '-' + file.lastModified }) });
+      doc = await r.json().catch(function () { return {}; });
+      if (!r.ok) throw new Error(typeof doc.detail === 'string' ? doc.detail : 'error ' + r.status);
+    } catch (x) {
+      window.nwToast('Could not start the upload: ' + x.message, 'error');
+      return false;
+    }
+    var at = doc.received || 0, step = doc.piece_max || 8388608, tries = 0;
+    onProgress(doc.id, Math.round(100 * at / file.size));
+    while (at < file.size) {
+      try {
+        r = await fetch(base + '/documents/' + doc.id + '/data?offset=' + at, { method: 'PUT', credentials: 'same-origin',
+          headers: Object.assign({ 'Content-Type': 'application/octet-stream' }, headers), body: file.slice(at, at + step) });
+        var body = await r.json().catch(function () { return {}; });
+        if (r.status === 409 && body.received != null) { at = body.received; continue; }   // the server was further along
+        if (r.status === 415) { onProgress(doc.id, null); window.nwToast('That file is not a PDF.', 'error'); return false; }
+        if (!r.ok) throw new Error(body.detail || ('error ' + r.status));
+        at = body.received != null ? body.received : at + step;
+        tries = 0;
+        onProgress(doc.id, Math.round(100 * at / file.size));
+      } catch (x) {
+        if (++tries > 5) {
+          onProgress(doc.id, null);
+          window.nwToast('The upload stopped. Choose the same file again to carry on from where it stopped.', 'error');
+          return false;
+        }
+        await new Promise(function (ok) { setTimeout(ok, 2000 * tries); });
+      }
+    }
+    onProgress(doc.id, null);
+    window.nwToast('Uploaded. Notewell is reading it now.', 'success');
+    return true;
   };
 
   // Colours: '' follows the computer, 'light' or 'dark' sticks (kept in this browser only).

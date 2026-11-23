@@ -404,3 +404,55 @@ def test_only_the_admin_sees_recordings(client, admin, app_module, monkeypatch):
     alice = {"X-API-Key": make_user(client, admin)["api_key"]}
     assert client.get("/account/recordings", headers=alice).status_code == 403
     assert client.patch("/account/recordings/abc123", headers=alice, json={"share_on": False}).status_code == 403
+
+
+# --- Documents (scanned PDFs read for AI, 23 Nov 2026): this PC passes the dashboard's request to the server ---
+
+def _with_documents(app_module, monkeypatch, linked=True):
+    seen = []
+
+    def documents(method, path, params, body, ctype):
+        if not linked:
+            raise app_module.recorder_bridge.NotSignedIn()
+        seen.append((method, path, params, body, ctype))
+        if path.endswith("/data"):
+            return 409, "application/json", "", b'{"detail":"carry on","received":42}'
+        if path.endswith("/markdown"):
+            return 200, "text/markdown; charset=utf-8", 'attachment; filename="plan.md"', b"# Plan\n"
+        return 200, "application/json", "", b'{"documents":[]}'
+
+    monkeypatch.setattr(app_module.recorder_bridge, "_account", None)
+    app_module.recorder_bridge.attach_account(status=lambda: {}, sign_in=lambda *a: {}, documents=documents)
+    return seen
+
+
+def test_documents_reach_the_server_with_the_reply_unchanged(client, admin, app_module, monkeypatch):
+    seen = _with_documents(app_module, monkeypatch)
+    assert client.get("/account/documents", headers=admin).json() == {"documents": []}
+    r = client.put("/account/documents/abc/data?offset=0", headers={**admin, "Content-Type": "application/octet-stream"}, content=b"%PDF-")
+    assert r.status_code == 409 and r.json()["received"] == 42          # "carry on from here" reaches the page
+    r = client.get("/account/documents/abc/markdown", headers=admin)
+    assert r.text == "# Plan\n" and "plan.md" in r.headers["content-disposition"]
+    assert [s[:2] for s in seen] == [("GET", "/documents"), ("PUT", "/documents/abc/data"), ("GET", "/documents/abc/markdown")]
+    assert seen[1][2] == {"offset": "0"} and seen[1][3] == b"%PDF-" and seen[1][4] == "application/octet-stream"
+
+
+def test_documents_need_this_pc_signed_in_and_only_the_admin(client, admin, app_module, monkeypatch):
+    _with_documents(app_module, monkeypatch, linked=False)
+    r = client.get("/account/documents", headers=admin)
+    assert r.status_code == 409 and "Sign in" in r.json()["detail"]
+    alice = {"X-API-Key": make_user(client, admin)["api_key"]}
+    assert client.get("/account/documents", headers=alice).status_code == 403
+
+
+def test_the_link_passes_on_only_documents_paths(tmp_path, app_module):
+    import sys
+    sys.path.insert(0, str(app_module.config.__file__).rsplit("backend", 1)[0] + "desktop")
+    import linked_server
+    (tmp_path / "linked-server.json").write_text(json.dumps({"url": "https://far.test", "api_key": "not-a-real-key"}))
+    lk = linked_server.Link(tmp_path, app_module.storage, "admin@example.test")
+    for bad in ("/users", "/documents/../users", "/documents/a/b/c", "/documentsx"):
+        with pytest.raises(ValueError):
+            lk.documents("GET", bad, {}, b"", "")
+    with pytest.raises(ValueError):
+        lk.documents("PATCH", "/documents", {}, b"", "")

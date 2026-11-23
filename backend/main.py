@@ -935,6 +935,29 @@ async def account_change_recording(req: RecordingChange, rid: str = PathParam(..
     return await _on_server("change_recording", rid, changes)
 
 
+@app.api_route("/account/documents{rest:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def account_documents(request: Request, rest: str, admin: dict = Depends(admin_only)):
+    """Documents (scanned PDFs read for AI, 23 Nov 2026) live on your server; this PC passes the
+    dashboard's request on unchanged, so the page uses the same code as the website."""
+    fn = _account().get("documents")
+    if fn is None:
+        raise HTTPException(501, "Documents need a newer Notewell desktop app.")
+    body = await request.body()
+    try:
+        status, ctype, disposition, content = await asyncio.to_thread(
+            fn, request.method, "/documents" + rest, dict(request.query_params), body,
+            request.headers.get("content-type", ""))
+    except recorder_bridge.NotSignedIn:
+        raise HTTPException(409, "Sign in to your Notewell server first (Settings, Your account).")
+    except ValueError:
+        raise HTTPException(404, "Not found")
+    except Exception as e:
+        log.warning("documents: server request failed: %s", type(e).__name__)
+        raise HTTPException(502, "Your server could not be reached. Try again in a moment.")
+    return Response(content=content, status_code=status, media_type=ctype or None,
+                    headers={"Content-Disposition": disposition} if disposition else None)
+
+
 # ------------------------------------------------------------- dashboard ---
 app.mount("/static", StaticFiles(directory=str(DASHBOARD_DIR)), name="static")
 

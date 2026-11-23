@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.7.8: Documents in the side menu (23 Nov 2026)
+
+### Added
+- **Documents page in the side menu, under Screen recordings.** Add a PDF (even a phone or Drive scan) and Notewell reads every page on your server so an AI can use it. Each document shows how far the reading has got; when it is ready you can download it as a .md file, or all ready documents as one .md. Remove puts it in the server's bin. The same list is on the website and the phone page.
+
 ## 2.7.7: Page titles no longer show address values (23 Nov 2026)
 
 ### Fixed

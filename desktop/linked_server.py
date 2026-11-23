@@ -99,6 +99,10 @@ def sign_in(home: Path, url: str, email: str, password: str, device_name: str, v
     return key
 
 
+# The only server paths documents() passes on.
+DOCUMENT_PATH = re.compile(r"/documents(-markdown|/[A-Za-z0-9_-]{1,64}(/data|/markdown)?)?")
+
+
 class Link:
     def __init__(self, home: Path, storage, owner: str, dictation=None, version: str = ""):
         cfg = read_link(home)
@@ -287,6 +291,18 @@ class Link:
             raise ValueError("not a recording id")
         body = {k: changes[k] for k in ("title", "share_on", "password", "expires_at") if k in changes}
         return self._send("PATCH", f"/recordings/{rid}", json=body).json()
+
+    # --- documents (scanned PDFs read for AI, 23 Nov 2026): they live on the server only ---
+
+    def documents(self, method: str, path: str, params: dict, body: bytes, content_type: str):
+        """Pass the dashboard's documents request to the server as it is, reply included
+        (a 409 'carry on from here' or a 415 'not a PDF' must reach the page unchanged)."""
+        if not DOCUMENT_PATH.fullmatch(path or "") or method not in ("GET", "POST", "PUT", "DELETE"):
+            raise ValueError("not a documents request")
+        headers = {"Content-Type": content_type} if content_type else {}
+        r = self.http.request(method, self.url + path, params=params, data=body or None, headers=headers,
+                              timeout=120, allow_redirects=False)     # an 8 MB piece on a slow line
+        return r.status_code, r.headers.get("content-type", ""), r.headers.get("content-disposition", ""), r.content
 
     def changes(self):
         """The server's change marks, or None when it cannot say (an older server, offline)."""

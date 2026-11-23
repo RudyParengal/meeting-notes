@@ -221,8 +221,9 @@ async function start() {
     every(5000, loadSessions);
     every(5000, refreshDictation);
     every(5000, function() { if (view === 'recordings' && !document.hidden) loadRecordings(); });
+    every(5000, function() { if (view === 'documents' && !document.hidden) loadDocuments(); });
     every(1000, function() { if (rec && (view === 'home' || rec.recording || rec.processing)) loadRecorder(true); });
-    go(['settings', 'trash', 'dictation', 'recordings'].indexOf(view) >= 0 ? view : 'home');
+    go(['settings', 'trash', 'dictation', 'recordings', 'documents'].indexOf(view) >= 0 ? view : 'home');
   } catch (e) { /* a 401 has already shown the sign-in screen */ }
 }
 
@@ -298,6 +299,7 @@ function renderNav() {
   nav.appendChild(item('home', 'Home'));
   if (isAdmin() && rec) nav.appendChild(item('dictation', 'Dictation'));
   if (isAdmin() && rec) nav.appendChild(item('recordings', 'Screen recordings'));
+  if (isAdmin() && rec) nav.appendChild(item('documents', 'Documents'));
   if (isAdmin()) nav.appendChild(item('settings', 'Settings', ai && !ai.ready ? h('span', { class: 'badge badge-warning', style: 'margin-left:auto' }, 'set up') : null));
   nav.appendChild(item('trash', 'Trash', trashCount ? h('span', { class: 'count' }, trashCount) : null));
 }
@@ -403,6 +405,7 @@ function go(v) {
   else if (v === 'settings') renderSettings();
   else if (v === 'dictation') { main.appendChild(h('div', { class: 'page narrow' }, h('h1', {}, 'Dictation'), h('div', { id: 'dictation-cards' }, h('p', { class: 'dim' }, 'Loading…')))); loadDictation(); }
   else if (v === 'recordings') renderRecordings();
+  else if (v === 'documents') renderDocuments();
   else if (v === 'trash') { main.appendChild(h('div', { class: 'page narrow', id: 'trash-page' }, h('h1', {}, 'Trash'), h('p', { class: 'dim' }, 'Loading…'))); loadSessions(); }
 }
 
@@ -1196,6 +1199,105 @@ async function loadRecordings() {
         if (saved) { toast('Sharing settings saved'); recShown = null; loadRecordings(); } } }, 'Share…') : null));
   });
   box.appendChild(card);
+}
+
+// --- documents: scanned PDFs read into text for AI (23 Nov 2026). Kept on your server, reached through this PC's sign-in ---
+
+var docShown = null, docSending = {};
+
+function renderDocuments() {
+  docShown = null;
+  var input = h('input', { type: 'file', accept: 'application/pdf,.pdf', style: 'display:none' });
+  input.onchange = function() { var f = input.files[0]; input.value = ''; if (f) sendDocument(f); };
+  var page = h('div', { class: 'page narrow', id: 'doc-page' },
+    h('h1', {}, 'Documents'),
+    h('p', { class: 'dim', style: 'margin:0 0 16px' }, 'Add a PDF, even a phone or Drive scan. Notewell reads every page so an AI can use it. You can also drop a PDF on this page.'),
+    h('div', { class: 'row', style: 'gap:8px;margin-bottom:12px' },
+      h('button', { class: 'btn btn-brand', onclick: function() { input.click(); } }, 'Add a PDF'),
+      h('span', { id: 'doc-all' })),
+    input,
+    h('div', { id: 'doc-list' }, h('p', { class: 'dim' }, 'Loading…')));
+  page.ondragover = function(e) { e.preventDefault(); };
+  page.ondrop = function(e) { e.preventDefault(); if (e.dataTransfer.files[0]) sendDocument(e.dataTransfer.files[0]); };
+  $('main').appendChild(page);
+  loadDocuments();
+}
+
+function sendDocument(file) {
+  return nwSendDocument(file, function(id, pct) {
+    if (pct == null) delete docSending[id]; else docSending[id] = pct;
+    docShown = null;
+    loadDocuments();
+  }, '/account', { 'Authorization': 'Bearer ' + sessionToken });
+}
+
+// The .md comes through this PC's backend, which needs the sign-in header, so it is fetched and then saved.
+async function saveDocument(path, name) {
+  try {
+    var r = await api('/account' + path);
+    if (!r.ok) { toast('Download failed: ' + await errorText(r)); return; }
+    saveBlob(await r.blob(), name);
+  } catch (e) { if (e.message !== 'auth') toast('Download failed. Check the connection and try again.'); }
+}
+
+async function loadDocuments() {
+  var box = $('doc-list');
+  if (!box) return;
+  var r, d;
+  var failed = function() {
+    if (docShown !== null && docShown !== 'error') return;   // the 5-second refresh stays quiet while a list is on screen
+    docShown = 'error';
+    box.innerHTML = '';
+    box.appendChild(nwErrorBanner('Could not load your documents. Check the connection and try again.', function() { docShown = null; loadDocuments(); }));
+  };
+  try { r = await api('/account/documents'); d = r.ok ? await r.json() : null; } catch (e) { if (e.message !== 'auth') failed(); return; }
+  if (!$('doc-list')) return;
+  if (!d) { failed(); return; }
+  var key = JSON.stringify(d) + JSON.stringify(docSending);
+  if (key === docShown) return;
+  docShown = key;
+  var items = d.documents || [];
+  var all = $('doc-all');
+  if (all) {
+    all.innerHTML = '';
+    if (items.filter(function(x) { return x.status === 'ready'; }).length >= 2)
+      all.appendChild(h('button', { class: 'btn', title: 'Every ready document in one file, for an AI agent or a Claude Project',
+        onclick: function() { saveDocument('/documents-markdown', 'notewell-documents.md'); } }, 'Download all as one .md'));
+  }
+  box.innerHTML = '';
+  if (!items.length) {
+    box.appendChild(h('div', { class: 'card' }, nwEmpty('No documents yet', 'Add a PDF and Notewell reads every page, so Claude can search it and open only the pages it needs.')));
+    return;
+  }
+  var card = h('div', { class: 'card', style: 'padding:8px' });
+  items.forEach(function(x) {
+    var sending = docSending[x.id], idle = x.status !== 'queued' && x.status !== 'reading' && sending == null;
+    var pill = sending != null ? h('span', { class: 'badge badge-info' }, 'sending ' + sending + '%')
+      : x.status === 'ready' ? h('span', { class: 'badge badge-success' }, x.pages + ' pages')
+      : x.status === 'failed' || x.status === 'uploading' ? h('span', { class: 'badge badge-error' }, x.status === 'failed' ? 'could not read' : 'upload stopped')
+      : h('span', { class: 'badge badge-warning' }, x.status === 'reading' ? 'reading' : 'waiting');
+    var added = new Date(x.created);
+    card.appendChild(h('div', { class: 'row', style: 'padding:8px 4px;border-bottom:1px solid var(--border)' },
+      h('div', { style: 'flex:1;min-width:0' }, h('b', {}, x.title || 'Document'), ' ', pill,
+        h('div', { class: 'hint' }, nwDocStatus(x, sending)),
+        h('div', { class: 'hint' }, (x.size / 1048576).toFixed(1) + ' MB · added ' + added.toLocaleDateString() + ' ' + timeOf(added.getTime()))),
+      x.status === 'ready' ? h('button', { class: 'btn btn-sm', title: 'The whole document as text, page by page, for an AI agent or a Claude Project',
+        onclick: function() { saveDocument('/documents/' + encodeURIComponent(x.id) + '/markdown', (x.title || 'document').replace(/[^\w\- ]+/g, '').trim().slice(0, 60) + '.md'); } }, 'Download .md') : null,
+      idle ? h('button', { class: 'btn btn-sm', onclick: async function() {
+        var yes = await nwConfirm({ title: 'Remove "' + (x.title || 'Document') + '"?',
+          body: 'It disappears from Notewell and from your AI tools. It is kept in a bin on the server, so it can be brought back if needed.',
+          ok: 'Remove', cancel: 'Keep', danger: true });
+        if (!yes) return;
+        try {
+          var del = await api('/account/documents/' + encodeURIComponent(x.id), { method: 'DELETE' });
+          if (!del.ok) { toast('Could not remove it: ' + await errorText(del)); return; }
+        } catch (e) { if (e.message !== 'auth') toast('Could not remove it. Check the connection and try again.'); return; }
+        toast('Removed "' + (x.title || 'Document') + '"');
+        docShown = null; loadDocuments(); } }, 'Remove') : null));
+  });
+  box.appendChild(card);
+  box.appendChild(h('p', { class: 'hint', style: 'margin-top:12px' }, 'To use one in Claude: ask it to "list my Notewell documents", then ask your question. ' +
+    'No connector? Download the .md and add it to the files of a Claude Project.'));
 }
 
 // The Share box's Save: '' when it worked, otherwise the reason, shown inside the box.

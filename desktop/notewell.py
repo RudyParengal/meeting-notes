@@ -274,7 +274,8 @@ def run() -> None:
 
     recorder_bridge.attach_account(status=account_status, sign_in=account_sign_in,
                                    recordings=lambda: _link().recordings(),
-                                   change_recording=lambda rid, changes: _link().change_recording(rid, changes))
+                                   change_recording=lambda rid, changes: _link().change_recording(rid, changes),
+                                   documents=lambda *a: _link().documents(*a))
 
     def warm_up(ctl):
         """Load (on first start, download) the speech model before the first meeting

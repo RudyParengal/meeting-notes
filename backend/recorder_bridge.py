@@ -54,16 +54,18 @@ def screen():
 
 # The account on your own server (desktop/linked_server.py), desktop app only:
 # {"status": () -> dict, "sign_in": (url, email, password) -> dict,
-#  "recordings": () -> list, "change_recording": (id, changes) -> dict}
+#  "recordings": () -> list, "change_recording": (id, changes) -> dict,
+#  "documents": (method, path, params, body, content_type) -> (status, type, disposition, bytes)}
 _account: Optional[dict] = None
 
 
 def attach_account(*, status: Callable[[], dict], sign_in: Callable[[str, str, str], dict],
                    recordings: Optional[Callable[[], list]] = None,
-                   change_recording: Optional[Callable[[str, dict], dict]] = None) -> None:
+                   change_recording: Optional[Callable[[str, dict], dict]] = None,
+                   documents: Optional[Callable[..., tuple]] = None) -> None:
     global _account
     _account = {"status": status, "sign_in": sign_in,
-                "recordings": recordings, "change_recording": change_recording}
+                "recordings": recordings, "change_recording": change_recording, "documents": documents}
 
 
 class NotSignedIn(Exception):
