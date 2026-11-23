@@ -63,6 +63,22 @@ def t_clean_url_cases():
 
 check("clean_url matches every case in tests/extension/clean_url.test.txt", t_clean_url_cases)
 
+
+def t_page_title_masks_address_values():
+    cases_file = ROOT / "tests" / "extension" / "clean_title.test.txt"
+    checked = 0
+    for line in cases_file.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        raw, expected = line.split("\t", 1)
+        ev = sb.validate_event({"k": "page", "url": "https://example.com/", "title": raw}, 1000)
+        assert ev is not None and ev["title"] == expected, (raw, ev, expected)
+        checked += 1
+    assert checked >= 8, checked
+
+
+check("a page title holding an address has its values masked (tests/extension/clean_title.test.txt)", t_page_title_masks_address_values)
+
 # ------------------------------------------------------------------- HTTP bridge
 print("\nBridge HTTP and validation")
 

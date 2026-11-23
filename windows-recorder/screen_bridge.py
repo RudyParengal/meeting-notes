@@ -14,6 +14,7 @@ import http.server
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 from pathlib import Path
@@ -94,6 +95,24 @@ def clean_url(raw):
     return out
 
 
+def clean_title(text):
+    """A page that has not loaded yet has its address as its title, query values and all.
+    Mask every word carrying ?key=value or #key=value the way clean_url masks addresses (same as clean_url.js)."""
+    out = []
+    for word in re.split(r"(\s+)", text):
+        m = re.search(r"[?#]", word)
+        if not m or "=" not in word[m.start():]:
+            out.append(word)
+            continue
+        has_scheme = re.match(r"(?i)https?://", word) is not None
+        cleaned = clean_url(word if has_scheme else "https://" + word)
+        if not cleaned:
+            out.append(word[:m.start()])
+        else:
+            out.append(cleaned if has_scheme else cleaned[len("https://"):])
+    return "".join(out)
+
+
 def validate_event(item, now_ms):
     """Validate one browser event dict. Returns a clean event dict with `t`, or None if invalid."""
     if type(item) is not dict:
@@ -116,7 +135,7 @@ def validate_event(item, now_ms):
         url = clean_url(item["url"])
         if not url:
             return None
-        return {"t": t, "k": "page", "url": url, "title": clip_text(item["title"], TITLE_MAX)}
+        return {"t": t, "k": "page", "url": url, "title": clip_text(clean_title(item["title"]), TITLE_MAX)}
 
     if k == "console":
         if "level" not in item or "message" not in item:

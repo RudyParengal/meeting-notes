@@ -54,6 +54,26 @@ function clean_url(u) {
   return out;
 }
 
+// A page that has not loaded yet has its address as its title, query string and all.
+// Mask every word in a title that carries ?a=b or #a=b, the way clean_url masks addresses.
+function clean_title(title) {
+  return String(title)
+    .split(/(\s+)/)
+    .map(function (word) {
+      var cut = word.search(/[?#]/);
+      if (cut < 0 || word.indexOf("=", cut) < 0) {
+        return word;
+      }
+      var hasScheme = /^https?:\/\//i.test(word);
+      var cleaned = clean_url(hasScheme ? word : "https://" + word);
+      if (!cleaned) {
+        return word.slice(0, cut);
+      }
+      return hasScheme ? cleaned : cleaned.replace(/^https:\/\//, "");
+    })
+    .join("");
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { clean_url: clean_url };
+  module.exports = { clean_url: clean_url, clean_title: clean_title };
 }

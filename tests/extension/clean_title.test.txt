@@ -1,0 +1,10 @@
+# clean_title cases: input<TAB>expected. Used by the helper (node) and the bridge (Python) tests.
+# A page that has not loaded yet has its address as its title, query values and all.
+example.com/no-such-page?test=123	example.com/no-such-page?test=*
+example.com?a=1	example.com/?a=*
+https://example.com/cb?code=abc&state=xyz	https://example.com/cb?code=*&state=*
+https://example.com/cb#access_token=abc	https://example.com/cb
+example.com/x?a=1 - Loading	example.com/x?a=* - Loading
+Example Domain	Example Domain
+Why? A guide to things	Why? A guide to things
+Q&A: a=b?	Q&A: a=b?

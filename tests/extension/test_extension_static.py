@@ -330,8 +330,44 @@ console.log("node checked " + count + " cases + long-url truncation OK");
     assert r.returncode == 0, f"node clean_url test failed: {r.stdout}\n{r.stderr}"
 
 
+def t_clean_title_in_node():
+    node = shutil.which("node")
+    if not node:
+        print("  NOTE  node is not installed; skipping node JS checks")
+        return
+    script = r"""
+const fs = require("fs");
+const { clean_title } = require(process.argv[1]);
+if (typeof clean_title !== "function") { console.error("clean_title is missing"); process.exit(1); }
+let count = 0;
+for (const raw of fs.readFileSync(process.argv[2], "utf8").split(/\r?\n/)) {
+  if (!raw || raw.startsWith("#")) continue;
+  const idx = raw.indexOf("\t");
+  const inp = raw.slice(0, idx), exp = raw.slice(idx + 1);
+  const got = clean_title(inp);
+  if (got !== exp) {
+    console.error("MISMATCH:", JSON.stringify(inp), "got", JSON.stringify(got), "expected", JSON.stringify(exp));
+    process.exit(1);
+  }
+  count += 1;
+}
+if (count < 8) { console.error("only " + count + " cases read"); process.exit(1); }
+console.log("node checked " + count + " title cases");
+"""
+    r = subprocess.run(
+        [node, "-e", script, str(EXT_DIR / "clean_url.js"), str(CASES_FILE.parent / "clean_title.test.txt")],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert r.returncode == 0, f"node clean_title test failed: {r.stdout}\n{r.stderr}"
+    bg = (EXT_DIR / "background.js").read_text(encoding="utf-8")
+    assert "clean_title(tab.title" in bg, "background.js does not clean page titles"
+
+
 check("clean_url Python reference matches clean_url.test.txt and B3 invariants", t_clean_url_python_cases)
 check("node syntax check and clean_url.js execution match clean_url.test.txt", t_clean_url_and_syntax_in_node)
+check("clean_title masks address values in page titles (clean_title.test.txt) and background.js uses it", t_clean_title_in_node)
 
 print(f"\n{_passed} passed, {len(_failed)} failed")
 sys.exit(1 if _failed else 0)

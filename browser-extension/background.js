@@ -97,7 +97,7 @@ function recordPageFromTab(tab) {
   if (isBridgeUrl(tab.url)) return;
   var url = clean_url(tab.url);
   if (!url) return;
-  var title = clipText(tab.title || "", TITLE_MAX);
+  var title = clipText(clean_title(tab.title || ""), TITLE_MAX);
   var key = url + "\n" + title;
   if (key === lastPageKey) return;
   lastPageKey = key;
