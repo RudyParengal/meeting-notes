@@ -555,6 +555,31 @@ def _frames(path):
         return kinds, n
 
 
+def _video_span(path):
+    """How many frames there are, and when the last one is, in seconds."""
+    import av
+    with av.open(str(path)) as c:
+        tb = float(c.streams.video[0].time_base)
+        n, last = 0, 0.0
+        for pkt in c.demux(video=0):
+            try:
+                for f in pkt.decode():
+                    n += 1
+                    if f.pts is not None:
+                        last = max(last, f.pts * tb)
+            except av.error.InvalidDataError:      # the torn last piece after a crash
+                pass
+        return n, last
+
+
+def _assert_not_frozen(n, last_s):
+    # Each frame is stamped with the clock, so a busy laptop records fewer frames
+    # (27 instead of about 75 seen on 23 Nov) but still covers the 5 s. The two
+    # bugs this guards against gave 1 frame (a thread froze loading a library)
+    # and stopped at 2.1 s (two frames on one timestamp).
+    assert n >= 15 and last_s >= 4.0, f"{n} frames, the last at {last_s:.1f} s, in 5 s of recording"
+
+
 def t_records_picture_and_sound():
     home, events = _record(5)
     done = [e for e in events if e.get("event") == "done"]
@@ -564,10 +589,7 @@ def t_records_picture_and_sound():
     assert len(jobs) == 1, box.jobs()
     kinds, n = _frames(box.video(jobs[0]["client_id"]))
     assert kinds == ["audio", "video"], kinds
-    # 15 frames a second for about 5 s. Two of the bugs this guards against gave
-    # 1 frame (a thread froze loading a library) and stopped at 2.1 s (two
-    # frames on one timestamp).
-    assert n >= 60, f"only {n} frames in 5 s"
+    _assert_not_frozen(*_video_span(box.video(jobs[0]["client_id"])))
     left = sorted(p.name for p in (home / "screen" / "outbox").iterdir())
     cid = jobs[0]["client_id"]
     assert left == sorted([f"{cid}.mp4", f"{cid}.json", f"{cid}.events.jsonl"]), left
@@ -703,7 +725,7 @@ def t_stop_while_paused():
     assert kinds == ["audio", "video"] and n >= 10, (kinds, n)
 
 
-check("5 s of recording: picture and sound, 15 frames a second, 3 files", t_records_picture_and_sound)
+check("5 s of recording: picture and sound, frames cover the 5 s, 3 files", t_records_picture_and_sound)
 check("killed mid-recording: what was recorded still plays", t_crash_keeps_what_was_recorded)
 check("start_events and stop_events never raise when something breaks", t_start_and_stop_events_never_raise)
 check("Capture.video_ms freezes during pause and resumes from the same value", t_video_ms_freezes_on_pause)

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.7.7: Page titles no longer show address values (23 Nov 2026)
+
+### Fixed
+- **A page title no longer shows the values in its address.** A tab that has not loaded yet uses its address as its title, so a title could show `?code=...` in full while the address beside it showed `?code=*`. The laptop app now masks titles too; the Chrome helper already does since its reload.
+
 ## 2.7.6: Chrome helper lines reach recordings (23 Nov 2026)
 
 ### Fixed
