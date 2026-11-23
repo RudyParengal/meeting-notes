@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.7.6: Chrome helper lines reach recordings (23 Nov 2026)
+
+### Fixed
+- **Page, console and network lines from the Chrome helper now reach the recording.** Before, the app turned away every request from the helper, so a recording made in Chrome had no Steps, Console or Network on its share page. After installing, click reload on the helper's card in chrome://extensions once.
+- **A minimised "Review recording" window comes back by itself.** Before, if it was minimised the recording waited unsent with nothing on screen to say so. It still sends nothing until you click Send.
+- **Web pages can no longer make up console lines** that look like they came from the helper.
+
+### Changed
+- The screen recorder's code is split into smaller files. Nothing it does has changed.
+
 ## 2.7.5: Screen recordings that show what happened (22 Nov 2026)
 
 ### Added
