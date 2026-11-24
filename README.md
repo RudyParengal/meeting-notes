@@ -47,6 +47,8 @@ A ChatGPT Plus, Claude Pro or SuperGrok subscription **does not include the API 
 
 Paste the prompt in **[docs/AGENT_SETUP.md](docs/AGENT_SETUP.md)** into Claude Code, Cursor, ChatGPT or any agent that can run commands on your computer. It installs Notewell, checks it, and tells you the one thing only you can do: paste your AI key.
 
+Not technical at all? Paste the prompt in **[docs/GROK_SETUP.md](docs/GROK_SETUP.md)** into Grok or any AI chat instead. It goes one small step at a time, explains every screen, and never asks you to type a password or key into the chat.
+
 ---
 
 ## Run it for a team (server + recorders)
@@ -76,6 +78,7 @@ Full instructions, including HTTPS and pointing each laptop's recorder at the se
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Something is not working |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How it fits together, and the API |
 | [docs/AGENT_SETUP.md](docs/AGENT_SETUP.md) | Prompt for an AI agent to install it for you |
+| [docs/GROK_SETUP.md](docs/GROK_SETUP.md) | Step-by-step install prompt for Grok or any AI chat, for non-technical people |
 | [SECURITY.md](SECURITY.md) | What is protected, what is your job, how to report a problem |
 | [CHANGELOG.md](CHANGELOG.md) | What changed between versions |
 
